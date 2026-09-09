@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Integration Monitor Spec</title>
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{color-scheme:light;--page:#f4f6f9;--surface:#fff;--surface-2:#eef1f5;--line:#dde2ea;--ink:#14171c;--ink-2:#4f5966;--ink-3:#7d8794;--accent:#2a78d6;--head:#1f3a5f;--head-ink:#fff;--warn-soft:#fff3d6;--warn-ink:#7a5200;--crit-soft:#fbe3e3;--crit-ink:#8f1f1f;--good-soft:#e2f5e2;--good-ink:#006300;
+--sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){color-scheme:dark;--page:#0f1216;--surface:#181c22;--surface-2:#1f242c;--line:#2a303a;--ink:#f2f4f7;--ink-2:#b4bcc7;--ink-3:#7f8894;--accent:#3987e5;--head:#243f66;--warn-soft:#3a2d0a;--warn-ink:#ffd066;--crit-soft:#3f1717;--crit-ink:#ff8a8a;--good-soft:#12301a;--good-ink:#5ed35e}}
+:root[data-theme="dark"]{color-scheme:dark;--page:#0f1216;--surface:#181c22;--surface-2:#1f242c;--line:#2a303a;--ink:#f2f4f7;--ink-2:#b4bcc7;--ink-3:#7f8894;--accent:#3987e5;--head:#243f66;--warn-soft:#3a2d0a;--warn-ink:#ffd066;--crit-soft:#3f1717;--crit-ink:#ff8a8a;--good-soft:#12301a;--good-ink:#5ed35e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.55}
+.wrap{max-width:880px;margin:0 auto;padding:40px 24px 80px}
+header{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:28px}
+h1{font-size:30px;font-weight:700;letter-spacing:-.02em;margin:0 0 6px;text-wrap:balance;color:var(--head)}
+:root[data-theme="dark"] h1{color:var(--ink)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) h1{color:var(--ink)}}
+.meta{color:var(--ink-3);font-size:13px}
+h2{font-size:20px;font-weight:600;margin:38px 0 12px;letter-spacing:-.01em;text-wrap:balance}
+h3{font-size:15px;font-weight:600;margin:22px 0 8px;color:var(--accent)}
+p{margin:0 0 12px;max-width:72ch;color:var(--ink-2)}
+p strong,li strong{color:var(--ink)}
+ul{margin:0 0 12px;padding-left:22px;color:var(--ink-2);max-width:72ch}li{margin-bottom:6px}
+.tablewrap{overflow-x:auto;margin:0 0 16px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{background:var(--head);color:var(--head-ink);text-align:left;font-weight:600;padding:9px 12px;font-size:12.5px}
+td{padding:9px 12px;border-top:1px solid var(--line);vertical-align:top;color:var(--ink-2)}
+td:first-child{color:var(--ink);font-weight:500;white-space:nowrap}
+code,.cat{font-family:var(--mono);font-size:.9em}
+.cat{padding:1px 6px;border-radius:4px;background:var(--surface-2);white-space:nowrap}
+.cat.block{background:var(--warn-soft);color:var(--warn-ink)}.cat.down{background:var(--crit-soft);color:var(--crit-ink)}
+pre{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;color:var(--ink);margin:0 0 16px}
+.callout{border-left:4px solid var(--accent);background:var(--surface);padding:12px 16px;border-radius:0 8px 8px 0;margin:0 0 16px}
+.callout p:last-child{margin:0}
+.verdict{background:var(--good-soft);color:var(--good-ink);border-left-color:var(--good-ink)}
+.verdict p{color:inherit}
+.toc{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;margin:14px 0 0}
+.toc a{color:var(--accent);text-decoration:none}.toc a:hover{text-decoration:underline}
+</style>
+<div class="wrap">
+<header>
+  <h1>NetSuite ↔ Shopify Integration Monitor</h1>
+  <div class="meta">Review of Larry's proposal · severity rules · escalation matrix · build spec — prepared for Ava, September 7, 2026</div>
+  <nav class="toc"><a href="#s1">1 Ask</a><a href="#s2">2 Review of Larry's outline</a><a href="#s3">3 Error categories</a><a href="#s4">4 Severity rules</a><a href="#s5">5 Escalation & alerting</a><a href="#s6">6 Data source</a><a href="#s7">7 Dashboard structure</a><a href="#s8">8 Questions for Larry</a></nav>
+</header>
+
+<h2 id="s1">1. What we are asking for</h2>
+<p>One dashboard, with alerting, that answers two questions at a glance: are all integration transactions between NetSuite and Shopify (through TeamCentral) flowing in and out correctly, and if not, how bad is it and who has been told. A second panel covers transactions that reached NetSuite but failed inside NetSuite for reasons unrelated to the integration (Vertex tax, inventory item not recognized, validation, permissions).</p>
+<p>A working prototype with sample data is published alongside this page. It implements the rules below in code so Larry can copy the logic, and it has a scenario switch so you can see what each severity level looks like before any real data is connected.</p>
+
+<h2 id="s2">2. Review of Larry's outline</h2>
+<p><strong>Overall:</strong> the outline is solid and covers the counting side of monitoring well. It is organized the right way (two flow directions plus indexing), the date-range controls and daily breakdown are exactly what a trend view needs, and the alert de-duplication idea (alert on first breach, re-alert only on continuation or escalation) is the right instinct. What it is missing is the operational layer you described: a severity model, a named escalation path, and the separation between integration faults and NetSuite-internal faults.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Area</th><th>Larry's outline</th><th>Gap / change requested</th></tr></thead>
+<tbody>
+<tr><td>Severity</td><td>Per-category numeric thresholds only (e.g. 5 errors = alert).</td><td>Add the four-level severity ladder (section 4). Thresholds stay as a second, lower-priority alert type; severity is driven by blocking mapping/indexing errors and by tool availability, not raw counts.</td></tr>
+<tr><td>Escalation</td><td>Email "the appropriate team or person", not defined.</td><td>Fixed matrix by level (section 5): Sev 1–2 → Larry &amp; Quennie, Estevan cc; Sev 3 adds Matt &amp; Olga; Sev 4 adds TeamCentral. Re-notify cadence per level.</td></tr>
+<tr><td>Tool down (Sev 4)</td><td>Not covered. A dead connector produces zero errors and would look healthy.</td><td>Add a heartbeat / zero-throughput check: no transactions in 60 min when the 4-week baseline expects traffic, or heartbeat older than 30 min.</td></tr>
+<tr><td>Day-2 aging (Sev 3)</td><td>"Track orders pending beyond a certain amount of time" — generic SLA.</td><td>Make it explicit: more than one blocking error still open after midnight of the day it was raised promotes the incident to Sev 3 and copies management.</td></tr>
+<tr><td>NetSuite-internal errors</td><td>Mixed into the flow error counts.</td><td>Separate panel and separate owner. Vertex, inventory, validation and permission errors are tagged group NETSUITE, do not move the severity ladder, and route to the NetSuite admin rather than the integration hotline.</td></tr>
+<tr><td>Error categories</td><td>"Categorize the errors" — no taxonomy proposed.</td><td>Use the fixed code list in section 3 so the dashboard and the emails speak the same language, and so a category maps to an owner and a playbook step.</td></tr>
+<tr><td>Indexing section</td><td>Counts of completed / new / failed index records.</td><td>Keep it, and link it: a failed or skipped index today is the root cause of tomorrow's MAP-* order error. Show the object type (customer, item, ship-to, location).</td></tr>
+<tr><td>SO re-runs</td><td>Count re-run messages and whether they succeeded.</td><td>Keep. Also show re-runs needed for the same category twice — repeated re-runs on one order is a mapping problem, not a transient one.</td></tr>
+<tr><td>Data source</td><td>Request TeamCentral API access; fall back to an internal database.</td><td>Agree with the hybrid, with one caveat (section 6).</td></tr>
+</tbody></table></div>
+<div class="callout verdict"><p><strong>Verdict:</strong> approve the outline as the reporting layer, and add the severity/escalation layer in this document as the operating layer. Nothing in Larry's plan needs to be removed.</p></div>
+
+<h2 id="s3">3. Error categories (the taxonomy)</h2>
+<p>Every logged failure is assigned exactly one code by matching the raw error text against a rule list, top to bottom. The group decides what happens next: MAPPING and INDEXING codes are integration-blocking and drive severity; NETSUITE codes go to the internal-log panel with thresholds; TRANSIENT codes are auto-retried and only reported if they repeat; OUTAGE is Sev 4.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Code</th><th>Meaning</th><th>Group</th><th>Match pattern (regex, case-insensitive)</th></tr></thead>
+<tbody>
+<tr><td><span class="cat block">MAP-CUST</span></td><td>Customer not mapped / indexed</td><td>MAPPING</td><td><code>customer.*(not (found|mapped)|missing)</code></td></tr>
+<tr><td><span class="cat block">MAP-ITEM</span></td><td>Item / SKU not mapped</td><td>MAPPING</td><td><code>(item|sku).*(not (found|mapped)|invalid)</code></td></tr>
+<tr><td><span class="cat block">MAP-SHIP</span></td><td>Ship-to address not mapped</td><td>MAPPING</td><td><code>(ship.?to|address).*(not (found|mapped)|invalid)</code></td></tr>
+<tr><td><span class="cat block">MAP-LOC</span></td><td>Location / store not mapped</td><td>MAPPING</td><td><code>(location|store|shop).*(not (found|mapped))</code></td></tr>
+<tr><td><span class="cat block">IDX-SKIP</span></td><td>Record skipped by indexing</td><td>INDEXING</td><td><code>skipped|no index|not indexed</code></td></tr>
+<tr><td><span class="cat">TAX-VERTEX</span></td><td>Vertex tax calculation failed</td><td>NETSUITE</td><td><code>vertex|tax (calc|service)</code></td></tr>
+<tr><td><span class="cat">INV-ITEM</span></td><td>Inventory item not recognized / insufficient</td><td>NETSUITE</td><td><code>inventory|insufficient|not recognized</code></td></tr>
+<tr><td><span class="cat">NS-PERM</span></td><td>Permission / role error</td><td>NETSUITE</td><td><code>permission|role|insufficient privilege</code></td></tr>
+<tr><td><span class="cat">VAL-DATA</span></td><td>Validation / required field missing</td><td>NETSUITE</td><td><code>required|invalid value|validation</code> (default if nothing else matches)</td></tr>
+<tr><td><span class="cat">API-RATE</span></td><td>Rate limit / timeout, auto-retried</td><td>TRANSIENT</td><td><code>rate limit|429|timeout|timed out</code></td></tr>
+<tr><td><span class="cat">DUP</span></td><td>Duplicate record suppressed</td><td>TRANSIENT</td><td><code>duplicate|already exists</code></td></tr>
+<tr><td><span class="cat down">CONN-DOWN</span></td><td>Connector heartbeat missing</td><td>OUTAGE</td><td><code>heartbeat|connector offline</code></td></tr>
+</tbody></table></div>
+<p>The patterns are a starting point written against typical TeamCentral and NetSuite error wording. Larry should pull one week of real log text, run it through the list, and adjust the patterns until fewer than 5% of errors fall into the VAL-DATA default bucket.</p>
+
+<h2 id="s4">4. Severity rules</h2>
+<p>Severity is evaluated on every refresh, per flow direction and overall (overall = the highest of any flow). It is computed from the set of open, unresolved, integration-blocking errors plus the connector's health.</p>
+<div class="tablewrap"><table>
+<thead><tr><th>Level</th><th>Condition</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>Sev 0</td><td>No open blocking errors; heartbeat fresh; traffic within baseline.</td><td>All flowing. Nothing to do.</td></tr>
+<tr><td>Sev 1</td><td>Exactly one transaction blocked by a MAPPING or INDEXING error.</td><td>One order is stuck because a customer, item, ship-to or location is not mapped.</td></tr>
+<tr><td>Sev 2</td><td>More than one transaction blocked, all opened today.</td><td>Several orders stuck; likely one missing mapping affecting many orders.</td></tr>
+<tr><td>Sev 3</td><td>More than one blocked <strong>and</strong> the oldest was opened before 00:00 today (unresolved into day 2).</td><td>Backlog is aging; management is copied.</td></tr>
+<tr><td>Sev 4</td><td>Heartbeat older than 30 min, <strong>or</strong> zero transactions in the last 60 min while the 4-week baseline for this hour and weekday is greater than zero.</td><td>Tool is down; nothing is moving in either direction.</td></tr>
+</tbody></table></div>
+<div class="callout"><p><strong>Two rules of thumb.</strong> Severity never steps down automatically while an incident is open; it drops only when the blocking errors are resolved or re-run successfully. And a single blocking error that ages into day 2 stays Sev 1 under your definition, but it is flagged as an SLA breach in the incident table and re-notified on the Sev 1 cadence — worth deciding whether you want that to auto-promote instead.</p></div>
+
+<h3>4.1 Rule configuration (JSON the dashboard reads)</h3>
+<pre>{
+  "severity": {
+    "blockingGroups": ["MAPPING", "INDEXING"],
+    "sev4": { "heartbeatMaxMinutes": 30, "zeroTrafficWindowMinutes": 60, "useBaseline": true },
+    "sev3": { "minBlocked": 2, "olderThan": "startOfToday" },
+    "sev2": { "minBlocked": 2 },
+    "sev1": { "minBlocked": 1 }
+  },
+  "thresholds": {
+    "S2N.errors": 5, "N2S.errors": 5, "S2N.rerun": 10, "IDX.failed": 3,
+    "NS.TAX-VERTEX": 3, "NS.INV-ITEM": 5, "NS.VAL-DATA": 10,
+    "pending.unresolvedHours": 4
+  },
+  "escalation": {
+    "1": { "notify": ["Larry","Quennie"], "cc": ["Estevan"], "renotifyMinutes": 240 },
+    "2": { "notify": ["Larry","Quennie"], "cc": ["Estevan"], "renotifyMinutes": 240 },
+    "3": { "notify": ["Larry","Quennie","Estevan"], "cc": ["Matt","Olga"], "renotifyMinutes": 120 },
+    "4": { "notify": ["Larry","Quennie","Estevan","Matt","Olga"], "cc": ["TeamCentral support"], "renotifyMinutes": 30 }
+  }
+}</pre>
+
+<h3>4.2 Classifier (pseudo-code, any language)</h3>
+<pre>category  = first CATEGORY_RULES entry whose regex matches the raw error text
+blocking  = category.group in ("MAPPING", "INDEXING")
+
+function classify(openBlocking, heartbeatAgeMin, txLast60, baselineLast60):
+    if heartbeatAgeMin > 30 or (txLast60 == 0 and baselineLast60 > 0):  return 4
+    n = count(openBlocking)
+    if n == 0:                                                           return 0
+    crossedDay = any(e.openedAt < startOfToday for e in openBlocking)
+    if n > 1 and crossedDay:                                             return 3
+    if n > 1:                                                            return 2
+    return 1</pre>
+
+<h3>4.3 NetSuite saved-search formula (if the log lives in a NetSuite custom record)</h3>
+<pre>-- Formula (Text) column on the integration-log custom record
+CASE
+  WHEN REGEXP_LIKE({custrecord_tc_error}, 'customer.*(not (found|mapped)|missing)', 'i') THEN 'MAP-CUST'
+  WHEN REGEXP_LIKE({custrecord_tc_error}, '(item|sku).*(not (found|mapped)|invalid)', 'i')  THEN 'MAP-ITEM'
+  WHEN REGEXP_LIKE({custrecord_tc_error}, '(ship.?to|address).*(not (found|mapped)|invalid)', 'i') THEN 'MAP-SHIP'
+  WHEN REGEXP_LIKE({custrecord_tc_error}, '(location|store|shop).*(not (found|mapped))', 'i') THEN 'MAP-LOC'
+  WHEN REGEXP_LIKE({custrecord_tc_error}, 'skipped|no index|not indexed', 'i')             THEN 'IDX-SKIP'
+  WHEN REGEXP_LIKE({custrecord_tc_error}, 'vertex|tax (calc|service)', 'i')                THEN 'TAX-VERTEX'
+  WHEN REGEXP_LIKE({custrecord_tc_error}, 'inventory|insufficient|not recognized', 'i')    THEN 'INV-ITEM'
+  WHEN REGEXP_LIKE({custrecord_tc_error}, 'permission|role|insufficient privilege', 'i')  THEN 'NS-PERM'
+  WHEN REGEXP_LIKE({custrecord_tc_error}, 'rate limit|429|timeout|timed out', 'i')         THEN 'API-RATE'
+  WHEN REGEXP_LIKE({custrecord_tc_error}, 'duplicate|already exists', 'i')                 THEN 'DUP'
+  ELSE 'VAL-DATA'
+END
+
+-- Severity input: a summary saved search, criteria
+--   status = 'Error' AND resolvedDate is empty AND category starts with 'MAP-' or 'IDX-'
+--   grouped by flow, with COUNT(id) and MIN(createdDate)</pre>
+
+<h2 id="s5">5. Escalation and alerting</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Level</th><th>Hotline (must act)</th><th>Copied</th><th>Re-notify while open</th></tr></thead>
+<tbody>
+<tr><td>Sev 1</td><td>Larry, Quennie</td><td>Estevan (manager)</td><td>Every 4 hours</td></tr>
+<tr><td>Sev 2</td><td>Larry, Quennie</td><td>Estevan (manager)</td><td>Every 4 hours</td></tr>
+<tr><td>Sev 3</td><td>Larry, Quennie, Estevan</td><td>Matt, Olga</td><td>Every 2 hours</td></tr>
+<tr><td>Sev 4</td><td>Larry, Quennie, Estevan, Matt, Olga</td><td>TeamCentral support</td><td>Every 30 minutes</td></tr>
+<tr><td>Threshold</td><td>Larry, Quennie</td><td>—</td><td>Every 4 hours</td></tr>
+<tr><td>NetSuite internal</td><td>NetSuite admin</td><td>Larry (visibility)</td><td>Daily digest unless over threshold</td></tr>
+</tbody></table></div>
+<p><strong>De-duplication.</strong> An incident is keyed on flow + category + entity reference. An email goes out when it is first opened, again only when its severity level changes, on the re-notify cadence above while it stays open, and once when it resolves. A dashboard refresh never re-sends. Larry's alert job needs a small state table (incident key, current level, last notified at, resolved at) to make this work — the one piece of storage the alerting needs even if the dashboard reads TeamCentral live.</p>
+<h3>5.1 Email template</h3>
+<pre>Subject: [SEV {level}] {flow} – {categoryCode}: {count} transaction(s) blocked
+
+Severity:        {level} ({levelName})
+Flow / process:  {flow}
+Category:        {categoryCode} – {categoryLabel}
+Current count:   {count}     Rule / threshold: {rule}
+First seen:      {openedAt}  Age: {age}
+Transactions:    {entityRefs} (links to TeamCentral log / NetSuite record)
+Error text:      {rawMessage}
+Recommended:     {playbookStep}  e.g. "Map SKU in TeamCentral index, then re-run SO"
+Escalated to:    {notify}   Cc: {cc}
+Next reminder:   in {renotifyMinutes} min unless resolved or level changes</pre>
+
+<h2 id="s6">6. Data source: TeamCentral log vs NetSuite log</h2>
+<p>You asked whether the TeamCentral transaction log is enough or whether NetSuite's own logs are needed. The answer is both, for different halves of the dashboard.</p>
+<ul>
+<li><strong>Integration flows and severity (Sev 1–4):</strong> the TeamCentral transaction log is the right source, because it is the only place that sees a transaction that never reached NetSuite (an unmapped customer stops the order before NetSuite is involved) and the only place that knows the connector's heartbeat.</li>
+<li><strong>NetSuite internal panel:</strong> NetSuite is the source. Vertex failures, inventory errors and validation failures are raised by NetSuite when the record is saved. A saved search on System Notes / the integration custom record, or on the integration role's execution log, gives these directly.</li>
+</ul>
+<div class="callout"><p><strong>Caveat on Larry's API request.</strong> TeamCentral's public developer documentation describes an OAuth 2 API Gateway with entity and message routes (for example <code>POST /api/{entitytype}messages</code> and <code>GET /api/coreentities/{entitytype}</code>) but does not document a transaction-log, run-status or error endpoint. Before Larry builds against an assumption, ask the TeamCentral account team three questions: is the transaction log queryable through the gateway or available as a scheduled export; can it emit a webhook on failure; and does it expose a heartbeat or last-run timestamp. If the answer is no to all three, the fallback is to have TeamCentral write each transaction outcome to a small NetSuite custom record (integration log) — then the whole dashboard, including severity, can be built as a Suitelet with saved searches, which is Larry's home ground.</p></div>
+
+<h2 id="s7">7. Dashboard structure (matches the prototype)</h2>
+<div class="tablewrap"><table>
+<thead><tr><th>Tab</th><th>What it shows</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td>Health strip</td><td>Current severity, plain-language reason, who has been escalated to.</td><td>Severity engine</td></tr>
+<tr><td>Overview</td><td>Sev 0–4 tiles, one card per flow (processed / errors / pending, 14-day error sparkline), volume by outcome (hourly today, daily for ranges), errors by category, open incidents table.</td><td>TeamCentral log</td></tr>
+<tr><td>Shopify → NetSuite</td><td>Processed, succeeded, errored (vs threshold), pending, SO re-runs and re-run success; categories; daily breakdown; open follow-ups.</td><td>TeamCentral log</td></tr>
+<tr><td>NetSuite → Shopify</td><td>Same layout for draft orders, fulfillments, inventory pushes.</td><td>TeamCentral log</td></tr>
+<tr><td>Indexing</td><td>Index runs, new records, failures vs threshold, object type breakdown, trend.</td><td>TeamCentral log</td></tr>
+<tr><td>NetSuite internal log</td><td>Posted / passed / failed in NetSuite; Vertex, inventory, validation counts vs thresholds; open NetSuite errors with NetSuite-admin owner.</td><td>NetSuite saved search</td></tr>
+<tr><td>Alerts &amp; escalations</td><td>Every alert that would have been sent under the current rules: level, recipients, trigger time, re-notify cadence, transaction IDs.</td><td>Alert state table</td></tr>
+<tr><td>Rules &amp; logic</td><td>The category list, severity ladder, escalation matrix, JSON config and formula syntax — the reference Larry builds from.</td><td>Static</td></tr>
+</tbody></table></div>
+<p>Controls: date range (Today, Yesterday, Last 7 days, Last 30 days, Custom) applies to counts and trends; the severity and open-incident views always reflect right now, regardless of range. The prototype's scenario switch (Sev 0 through Sev 4) exists only to demonstrate the rules and is removed in the real build.</p>
+
+<h2 id="s8">8. Questions to close with Larry before build</h2>
+<ul>
+<li>Confirm the TeamCentral log fields available: transaction id, direction, object type, status, raw error text, created and resolved timestamps, re-run flag, and a heartbeat or last-run time.</li>
+<li>Confirm where the alert state table and threshold configuration will live (NetSuite custom records is simplest if the dashboard is a Suitelet).</li>
+<li>Decide whether a single blocking error aging into day 2 should auto-promote to Sev 3 or remain Sev 1 with an SLA flag (the prototype does the latter).</li>
+<li>Agree the initial threshold numbers in section 4.1 — they are placeholders to be tuned against one month of real volume.</li>
+<li>Decide on the notification channel: email only, or email plus a Teams/Slack post for Sev 3–4.</li>
+<li>Use the prototype's Rules &amp; logic tab as the acceptance criteria: the real dashboard must classify the same sample messages to the same codes and levels.</li>
+</ul>
+</div>
+
+</body>
+</html>
