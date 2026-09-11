@@ -7,7 +7,15 @@
       "Bash(docker exec:*)",
       "Bash(git init:*)",
       "Bash(git remote add:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd Integration Monitor database schema \\(Phase 1\\)\n\nPostgreSQL schema for the Integration Monitor dashboard with 13 tables,\n8 views, 72 indexes, and full acceptance test suite. Includes Docker\nCompose setup, migration files, and database design documentation.\n\nTables: systems, integration_endpoints, error_categories,\nintegration_transactions, transaction_events, integration_errors,\nintegration_reruns, indexing_activity, sla_rules, sla_breaches,\nteam_central_raw_events, connector_heartbeats, severity_snapshots.\n\nAll 12 acceptance tests pass against a clean Docker PostgreSQL 16\ninstance. Schema is Azure Database for PostgreSQL compatible.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(gh auth:*)",
+      "Bash(gh repo view:*)",
+      "Bash(gh api:*)",
+      "Bash(start \"\" \"C:\\\\Users\\\\Lenie\\\\Desktop\\\\Team Central Dashboard\\\\codes\\\\Integration Monitor Dashboard PROTOTYPE.html\")",
+      "Bash(docker ps:*)"
     ]
   }
 }

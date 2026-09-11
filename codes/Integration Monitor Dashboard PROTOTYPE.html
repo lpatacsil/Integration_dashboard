@@ -188,7 +188,7 @@ pre{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;p
     <h1>NetSuite–Shopify Flow Monitor</h1>
     <div class="sub">TeamCentral integration · NetSuite internal log · escalation status</div>
   </div>
-  <span class="sample-tag">Prototype · sample data, not live</span>
+  <span class="sample-tag" id="connTag" style="background:var(--good-soft);color:var(--good-ink)">Connecting to API...</span>
   <div class="control">
     <label>Range</label>
     <div class="seg" id="rangeSeg">
@@ -201,16 +201,6 @@ pre{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;p
     <div class="custom-range" id="customRange">
       <input type="date" id="fromD"> <span class="muted">to</span> <input type="date" id="toD">
     </div>
-  </div>
-  <div class="control">
-    <label>Scenario</label>
-    <select id="scenario">
-      <option value="healthy">All flowing (Sev 0)</option>
-      <option value="sev1">One order blocked by mapping (Sev 1)</option>
-      <option value="sev2" selected>Several blocked by mapping (Sev 2)</option>
-      <option value="sev3">Blocked orders rolled into day 2 (Sev 3)</option>
-      <option value="sev4">Connector down, nothing flowing (Sev 4)</option>
-    </select>
   </div>
 </div>
 
@@ -338,244 +328,246 @@ END</pre>
 </section>
 
 <script>
-/* ---------- configuration (this is the part Larry wires to real data) ---------- */
-const CATEGORY_RULES = [
-  {code:"MAP-CUST",  group:"MAPPING",  label:"Customer not mapped / indexed",      match:"customer.*(not (found|mapped)|missing)"},
-  {code:"MAP-ITEM",  group:"MAPPING",  label:"Item / SKU not mapped",              match:"(item|sku).*(not (found|mapped)|invalid)"},
-  {code:"MAP-SHIP",  group:"MAPPING",  label:"Ship-to address not mapped",         match:"(ship.?to|address).*(not (found|mapped)|invalid)"},
-  {code:"MAP-LOC",   group:"MAPPING",  label:"Location / store not mapped",        match:"(location|store|shop).*(not (found|mapped))"},
-  {code:"IDX-SKIP",  group:"INDEXING", label:"Record skipped by indexing",         match:"skipped|no index|not indexed"},
-  {code:"TAX-VERTEX",group:"NETSUITE", label:"Vertex tax calculation failed",      match:"vertex|tax (calc|service)"},
-  {code:"INV-ITEM",  group:"NETSUITE", label:"Inventory item not recognized / short", match:"inventory|insufficient|not recognized"},
-  {code:"NS-PERM",   group:"NETSUITE", label:"Permission / role error",            match:"permission|role|insufficient privilege"},
-  {code:"VAL-DATA",  group:"NETSUITE", label:"Validation / missing required field",match:"required|invalid value|validation"},
-  {code:"API-RATE",  group:"TRANSIENT",label:"Rate limit / timeout (auto-retry)",  match:"rate limit|429|timeout|timed out"},
-  {code:"DUP",       group:"TRANSIENT",label:"Duplicate record",                   match:"duplicate|already exists"},
-  {code:"CONN-DOWN", group:"OUTAGE",   label:"Connector heartbeat missing",        match:"heartbeat|connector offline"}
-];
-const RULES = {
-  severity: {
-    blockingGroups: ["MAPPING","INDEXING"],
-    sev4: { heartbeatMaxMinutes: 30, zeroTrafficWindowMinutes: 60, useBaseline: true },
-    sev3: { minBlocked: 2, olderThan: "startOfToday" },
-    sev2: { minBlocked: 2 },
-    sev1: { minBlocked: 1 }
-  },
-  thresholds: {   // Larry's per-category counters, per day. Crossing = warning alert (not severity)
-    "S2N.errors": 5, "N2S.errors": 5, "S2N.rerun": 10, "IDX.failed": 3,
-    "NS.TAX-VERTEX": 3, "NS.INV-ITEM": 5, "NS.VAL-DATA": 10, "pending.unresolvedHours": 4
-  },
-  escalation: {
-    1: { notify:["Larry","Quennie"], cc:["Estevan"], renotifyMinutes:240 },
-    2: { notify:["Larry","Quennie"], cc:["Estevan"], renotifyMinutes:240 },
-    3: { notify:["Larry","Quennie","Estevan"], cc:["Matt","Olga"], renotifyMinutes:120 },
-    4: { notify:["Larry","Quennie","Estevan","Matt","Olga"], cc:["TeamCentral support"], renotifyMinutes:30 }
-  }
+/* ---------- configuration ---------- */
+const API = 'http://localhost:3001/api';
+let CATEGORY_RULES = [];
+let RULES = { severity:{blockingGroups:["MAPPING","INDEXING"]}, thresholds:{}, escalation:{} };
+const FLOWS = {
+  S2N:{name:"Shopify → NetSuite",dir:"Orders · customers · payments"},
+  N2S:{name:"NetSuite → Shopify",dir:"Draft orders · fulfillments · inventory"},
+  IDX:{name:"Indexing",dir:"Customer · item · ship-to · location"},
+  NS:{name:"NetSuite internal",dir:"Vertex · inventory · validation"}
 };
-document.getElementById("ruleJson").textContent = JSON.stringify(RULES,null,2);
-document.getElementById("catTable").innerHTML = CATEGORY_RULES.map(c=>`<tr><td><span class="cat ${c.group==="MAPPING"||c.group==="INDEXING"?"block":c.group==="OUTAGE"?"down":""}">${c.code}</span></td><td>${c.label}</td><td class="muted">${c.group}</td><td><code>/${c.match}/i</code></td></tr>`).join("");
+const isBlocking = c => c && (c.group === 'MAPPING' || c.group === 'INDEXING' || c.error_group === 'MAPPING' || c.error_group === 'INDEXING');
 
-/* ---------- sample data generator (deterministic) ---------- */
-let seed=20260907; const rnd=()=>{seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;};
-const now=new Date(); now.setHours(14,32,0,0);
-const dayStart=d=>{const x=new Date(d);x.setHours(0,0,0,0);return x;};
-const startOfToday=dayStart(now);
-const FLOWS={S2N:{name:"Shopify → NetSuite",dir:"Orders · customers · payments",base:[70,120]},N2S:{name:"NetSuite → Shopify",dir:"Draft orders · fulfillments · inventory",base:[40,80]},IDX:{name:"Indexing",dir:"Customer · item · ship-to · location",base:[150,260]},NS:{name:"NetSuite internal",dir:"Vertex · inventory · validation",base:[90,140]}};
-const MSG={
- "MAP-CUST":["Customer 'Northwind Retail' not found in NetSuite index","Customer record not mapped for Shopify customer #7841"],
- "MAP-ITEM":["Item SKU 'BLK-TEE-XL-2' not mapped to NetSuite item","Item not found: SKU 'GIFT-CARD-50'"],
- "MAP-SHIP":["Ship-to address not mapped: 'Suite 400, Dallas TX'"],
- "MAP-LOC":["Location 'Shopify POS – Austin' not mapped to NetSuite location"],
- "IDX-SKIP":["Record skipped: customer index batch 0912 – no index key"],
- "TAX-VERTEX":["Vertex tax service returned 503 – tax calc failed","Vertex: jurisdiction not resolved for ZIP 73301"],
- "INV-ITEM":["Inventory item not recognized in location 3","Insufficient inventory for item 'HAT-NAVY' (need 4, have 1)"],
- "NS-PERM":["Insufficient privilege: role 'Integration' cannot edit Sales Order"],
- "VAL-DATA":["Required field 'Department' missing on Sales Order","Invalid value for field 'shipmethod'"],
- "API-RATE":["Shopify API rate limit (429) – retried","Request timed out after 30s – retried"],
- "DUP":["Order #SH-58213 already exists – duplicate suppressed"]
-};
-const ENT={S2N:i=>"SH-"+(58000+i),N2S:i=>"SO-"+(41000+i),IDX:i=>"IDX-"+(900+i),NS:i=>"SO-"+(41000+i)};
-const pick=a=>a[Math.floor(rnd()*a.length)];
-function classifyMsg(text){for(const c of CATEGORY_RULES){if(new RegExp(c.match,"i").test(text))return c;}return CATEGORY_RULES.find(c=>c.code==="VAL-DATA");}
-const isBlocking=c=>RULES.severity.blockingGroups.includes(c.group);
-const TX=[]; let idc=0;
-const errMix={S2N:["MAP-CUST","MAP-ITEM","MAP-SHIP","VAL-DATA","API-RATE","DUP","TAX-VERTEX"],N2S:["MAP-ITEM","MAP-LOC","API-RATE","VAL-DATA","INV-ITEM"],IDX:["IDX-SKIP","MAP-CUST","MAP-ITEM"],NS:["TAX-VERTEX","INV-ITEM","VAL-DATA","NS-PERM"]};
-for(let d=29;d>=0;d--){
-  const day=new Date(startOfToday); day.setDate(day.getDate()-d);
-  const dow=day.getDay(); const wk=(dow===0||dow===6)?0.45:1;
-  for(const f in FLOWS){
-    const [lo,hi]=FLOWS[f].base; const n=Math.round((lo+rnd()*(hi-lo))*wk*(d===0?0.62:1));
-    const errRate=f==="IDX"?0.02:f==="NS"?0.045:0.035;
-    for(let i=0;i<n;i++){
-      const ts=new Date(day); ts.setHours(6+Math.floor(rnd()*14),Math.floor(rnd()*60));
-      if(d===0&&ts>now)continue;
-      const r=rnd(); let status="success",code=null,msg="",resolved=null,rerun=false;
-      if(r<errRate){ code=pick(errMix[f]); msg=pick(MSG[code]); status="error";
-        const c=classifyMsg(msg);
-        if(c.group==="TRANSIENT"){status="rerun";rerun=true;resolved=new Date(ts.getTime()+15*60000);}
-        else if(d>0||rnd()<0.6){resolved=new Date(ts.getTime()+(30+rnd()*600)*60000);rerun=rnd()<0.5;}
-      } else if(r<errRate+0.012){status="pending";}
-      TX.push({id:++idc,flow:f,type:f==="N2S"?(rnd()<0.6?"Draft Order":"Fulfillment"):f==="S2N"?"Order":f==="IDX"?pick(["Customer","Item","Ship-to","Location"]):"Sales Order",ts,status,category:code?classifyMsg(msg).code:null,message:msg,entity:ENT[f](idc%900),resolvedAt:resolved,rerun});
-    }
+/* ---------- API fetch helper ---------- */
+async function fetchJSON(path, params = {}) {
+  const url = new URL(API + path);
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null) url.searchParams.set(k, v);
   }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json();
 }
-/* scenario injection: open blocking incidents "right now" */
-function inject(list){for(const [f,code,hoursAgo] of list){const msg=MSG[code][0];const ts=new Date(now.getTime()-hoursAgo*3600000);TX.push({id:++idc,flow:f,type:f==="S2N"?"Order":"Draft Order",ts,status:"error",category:code,message:msg,entity:ENT[f](idc%900),resolvedAt:null,rerun:false,injected:true});}}
-const SCEN={
-  healthy:{inject:[],heartbeatMin:2,down:false},
-  sev1:{inject:[["S2N","MAP-ITEM",1.2]],heartbeatMin:3,down:false},
-  sev2:{inject:[["S2N","MAP-ITEM",1.2],["S2N","MAP-CUST",2.5],["N2S","MAP-LOC",0.7]],heartbeatMin:3,down:false},
-  sev3:{inject:[["S2N","MAP-ITEM",1.2],["S2N","MAP-CUST",19.5],["N2S","MAP-LOC",26]],heartbeatMin:3,down:false},
-  sev4:{inject:[["S2N","MAP-CUST",3]],heartbeatMin:74,down:true}
-};
 
 /* ---------- state ---------- */
-let range={key:"today"}, tab="overview";
-function rangeBounds(){
-  const from=new Date(startOfToday), to=new Date(now);
-  if(range.key==="yesterday"){from.setDate(from.getDate()-1);to.setTime(startOfToday.getTime()-1);}
-  else if(range.key==="7")from.setDate(from.getDate()-6);
-  else if(range.key==="30")from.setDate(from.getDate()-29);
-  else if(range.key==="custom"){from.setTime(range.from.getTime());to.setTime(range.to.getTime()+86399999);}
-  return {from,to};
-}
-function fmtAge(ms){const h=Math.floor(ms/3600000),m=Math.floor(ms%3600000/60000);return h>=24?`${Math.floor(h/24)}d ${h%24}h`:h?`${h}h ${m}m`:`${m}m`;}
-const fmtT=d=>d.toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
-const fmtD=d=>d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+let range = { key: "30" };  // default to 30 days to show data
+let tab = "overview";
+const now = new Date();
+const dayStart = d => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+const startOfToday = dayStart(now);
 
-/* ---------- severity engine ---------- */
-function classify(openBlocking,heartbeatAgeMin,txLast60,baselineLast60){
-  const s=RULES.severity;
-  if(heartbeatAgeMin>s.sev4.heartbeatMaxMinutes||(txLast60===0&&baselineLast60>0))return 4;
-  const n=openBlocking.length; if(n===0)return 0;
-  const crossed=openBlocking.some(e=>e.ts<startOfToday);
-  if(n>=s.sev3.minBlocked&&crossed)return 3;
-  if(n>=s.sev2.minBlocked)return 2;
-  return 1;
+function rangeDates() {
+  const from = new Date(startOfToday), to = new Date(startOfToday);
+  if (range.key === "yesterday") { from.setDate(from.getDate()-1); to.setDate(to.getDate()-1); }
+  else if (range.key === "7") from.setDate(from.getDate()-6);
+  else if (range.key === "30") from.setDate(from.getDate()-29);
+  else if (range.key === "custom" && range.from && range.to) {
+    return { startDate: range.from.toISOString().slice(0,10), endDate: range.to.toISOString().slice(0,10) };
+  }
+  return { startDate: from.toISOString().slice(0,10), endDate: to.toISOString().slice(0,10) };
 }
-function evaluate(){
-  const sc=SCEN[document.getElementById("scenario").value];
-  const data=TX.filter(t=>!t.injected||t.scen===sc);
-  const openBlocking=data.filter(t=>t.status==="error"&&!t.resolvedAt&&t.category&&isBlocking(classifyMsg(t.message)));
-  const txLast60=sc.down?0:data.filter(t=>t.flow!=="NS"&&now-t.ts<3600000).length;
-  const baseline=18; // 4-week average for this hour/weekday (would be computed from history)
-  const overall=classify(openBlocking,sc.heartbeatMin,txLast60,baseline);
-  const perFlow={};
-  for(const f in FLOWS){const ob=openBlocking.filter(t=>t.flow===f);perFlow[f]=f==="NS"?0:classify(ob,sc.heartbeatMin,sc.down?0:1,baseline);}
-  return {sc,data,openBlocking,txLast60,baseline,overall,perFlow};
+
+/* ---------- formatters ---------- */
+function fmtAge(minutes) {
+  const h = Math.floor(minutes / 60), m = Math.floor(minutes % 60);
+  return h >= 24 ? `${Math.floor(h/24)}d ${h%24}h` : h ? `${h}h ${m}m` : `${m}m`;
 }
+const fmtT = d => new Date(d).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
+const fmtD = d => new Date(d).toLocaleDateString("en-US",{month:"short",day:"numeric"});
 
 /* ---------- rendering ---------- */
-const $=id=>document.getElementById(id);
-const sevName=["Healthy","Sev 1","Sev 2","Sev 3","Sev 4"];
-const pillCls=l=>l===0?"ok":"s"+l;
-function render(){
-  // re-inject for current scenario
-  for(let i=TX.length-1;i>=0;i--)if(TX[i].injected)TX.splice(i,1);
-  const scKey=document.getElementById("scenario").value; inject(SCEN[scKey].inject); TX.forEach(t=>{if(t.injected)t.scen=SCEN[scKey];});
-  const ev=evaluate(); const {from,to}=rangeBounds();
-  const inR=ev.data.filter(t=>t.ts>=from&&t.ts<=to);
-  const esc=RULES.escalation[ev.overall];
+const $ = id => document.getElementById(id);
+const sevName = ["Healthy","Sev 1","Sev 2","Sev 3","Sev 4"];
+const pillCls = l => l===0 ? "ok" : "s"+l;
 
-  // health strip
-  const h=$("health"); h.dataset.sev=ev.overall; $("hStatus").textContent=ev.overall?`Severity ${ev.overall}`:"All flows healthy";
-  let why="";
-  if(ev.overall===4)why=`<strong>Connector is down.</strong> Last heartbeat ${ev.sc.heartbeatMin} min ago; ${ev.txLast60} transactions in the last 60 min against a baseline of ~${ev.baseline}. Nothing is moving between Shopify and NetSuite.`;
-  else if(ev.overall===3){const old=ev.openBlocking.filter(t=>t.ts<startOfToday);why=`<strong>${ev.openBlocking.length} transactions blocked by mapping gaps</strong>, ${old.length} of them open since yesterday (${old.map(t=>t.entity).join(", ")}). Unresolved into day 2 — management is now copied.`;}
-  else if(ev.overall===2)why=`<strong>${ev.openBlocking.length} transactions blocked</strong> by unmapped data objects (${[...new Set(ev.openBlocking.map(t=>t.category))].join(", ")}), all opened today. Everything else is flowing.`;
-  else if(ev.overall===1){const t=ev.openBlocking[0];why=`<strong>One transaction blocked:</strong> ${t.entity} — ${t.message}. All other traffic flowing normally.`;}
-  else why=`No blocking errors open. Heartbeat ${ev.sc.heartbeatMin} min ago, ${ev.txLast60} transactions in the last hour. Non-blocking NetSuite errors, if any, are on the internal log tab.`;
-  $("hWhy").innerHTML=why;
-  $("hOncall").innerHTML=esc?`<b>Escalated to</b> <span class="who">${esc.notify.join(", ")}</span><br><b>Copied</b> <span class="who">${esc.cc.join(", ")}</span><br>Re-notify every ${esc.renotifyMinutes>=60?esc.renotifyMinutes/60+" h":esc.renotifyMinutes+" min"} while open`:`<b>Hotline on standby</b> <span class="who">Larry, Quennie</span><br>Nobody has been paged.`;
+async function render() {
+  const dates = rangeDates();
+  const tag = $("connTag");
 
-  // severity tiles: count open blocking incidents that would sit at each level
-  const defs=["No blocking errors, heartbeat fresh","One transaction blocked by mapping / indexing","More than one blocked, opened today","More than one blocked, unresolved into day 2","Tool down — nothing flowing"];
-  const counts=[0,0,0,0,0]; counts[ev.overall]=ev.overall===0?1:ev.overall===4?1:ev.openBlocking.length;
-  $("sevTiles").innerHTML=[0,1,2,3,4].map(l=>`<div class="card sevtile" data-lvl="${l}"><span class="lbl">${sevName[l]}</span><span class="n ${l===ev.overall?"":"zero"}">${l===ev.overall?(l===0?"✓":l===4?"DOWN":counts[l]):"—"}</span><span class="def">${defs[l]}</span></div>`).join("");
+  try {
+    // Fetch all data in parallel
+    const [overview, trendData, errorCats, openIncidents, alertsData] = await Promise.all([
+      fetchJSON('/overview', dates),
+      fetchJSON('/trends', { ...dates, granularity: range.key === "today" ? "hour" : "day" }),
+      fetchJSON('/errors/categories', dates),
+      fetchJSON('/errors/open-incidents'),
+      fetchJSON('/alerts', dates),
+    ]);
 
-  // flow cards
-  $("flowCards").innerHTML=Object.keys(FLOWS).map(f=>{
-    const rows=inR.filter(t=>t.flow===f); const ok=rows.filter(t=>t.status==="success").length, er=rows.filter(t=>t.status==="error").length, pe=rows.filter(t=>t.status==="pending"||t.status==="rerun").length;
-    const lvl=ev.perFlow[f]; const nsOpen=f==="NS"?rows.filter(t=>t.status==="error"&&!t.resolvedAt).length:0;
-    const pill=f==="NS"?(nsOpen>0?`<span class="pill warnp">${nsOpen} open</span>`:`<span class="pill ok">Clear</span>`):`<span class="pill ${pillCls(lvl)}">${sevName[lvl]}</span>`;
-    return `<div class="card flow"><div class="head"><div><div class="name">${FLOWS[f].name}</div><div class="dir">${FLOWS[f].dir}</div></div>${pill}</div>
-      <div class="nums"><div>Processed<b>${rows.length}</b></div><div>Errors<b class="${er?"err":""}">${er}</b></div><div>Pending / re-run<b>${pe}</b></div></div>${spark(f,ev.data)}</div>`;
-  }).join("");
+    tag.textContent = "Live · API connected";
+    tag.style.background = "var(--good-soft)";
+    tag.style.color = "var(--good-ink)";
 
-  // trend chart
-  trend(inR); $("chartHint").textContent=range.key==="today"?"today, by hour":`${fmtD(from)} – ${fmtD(to)}, by day`;
+    const sev = overview.severity;
+    const esc = overview.escalation;
+    const ob = overview.openBlocking || [];
 
-  // category breakdown
-  const cats={}; inR.filter(t=>t.status==="error"||t.status==="rerun").forEach(t=>cats[t.category]=(cats[t.category]||0)+1);
-  const arr=Object.entries(cats).sort((a,b)=>b[1]-a[1]); const mx=arr[0]?arr[0][1]:1;
-  $("catBreak").innerHTML=arr.length?arr.map(([c,n])=>{const r=CATEGORY_RULES.find(x=>x.code===c);return `<div style="margin:8px 0"><div style="display:flex;justify-content:space-between;gap:8px"><span><span class="cat ${isBlocking(r)?"block":""}">${c}</span> <span class="muted">${r.label}</span></span><b style="font-variant-numeric:tabular-nums">${n}</b></div><div class="bar-inline"><i style="width:${n/mx*100}%;background:${isBlocking(r)?"var(--warn)":"var(--s2)"}"></i></div></div>`;}).join(""):`<div class="empty">No errors in this range.</div>`;
+    // Health strip
+    const h = $("health");
+    h.dataset.sev = sev;
+    $("hStatus").textContent = sev ? `Severity ${sev}` : "All flows healthy";
 
-  // open incidents
-  const open=ev.data.filter(t=>(t.status==="error"&&!t.resolvedAt)||t.status==="pending").sort((a,b)=>b.ts-a.ts);
-  $("openTable").innerHTML=incidentTable(open,true);
+    let why = "";
+    if (sev === 4) why = `<strong>Connector is down.</strong> Last heartbeat ${overview.heartbeatAgeMin} min ago; ${overview.txLast60} transactions in the last 60 min against a baseline of ~${overview.baselineLast60}. Nothing is moving between Shopify and NetSuite.`;
+    else if (sev === 3) {
+      const old = ob.filter(e => new Date(e.occurred_at) < startOfToday);
+      why = `<strong>${ob.length} transactions blocked by mapping gaps</strong>, ${old.length} of them open since yesterday (${old.map(e=>e.entity_identifier).join(", ")}). Unresolved into day 2 — management is now copied.`;
+    }
+    else if (sev === 2) why = `<strong>${ob.length} transactions blocked</strong> by unmapped data objects (${[...new Set(ob.map(e=>e.error_code))].join(", ")}), all opened today. Everything else is flowing.`;
+    else if (sev === 1) { const e = ob[0]; why = `<strong>One transaction blocked:</strong> ${e.entity_identifier} — ${e.error_message}. All other traffic flowing normally.`; }
+    else why = `No blocking errors open. Heartbeat ${overview.heartbeatAgeMin} min ago, ${overview.txLast60} transactions in the last hour. Non-blocking NetSuite errors, if any, are on the internal log tab.`;
+    $("hWhy").innerHTML = why;
+    $("hOncall").innerHTML = esc
+      ? `<b>Escalated to</b> <span class="who">${esc.notify.join(", ")}</span><br><b>Copied</b> <span class="who">${esc.cc.join(", ")}</span><br>Re-notify every ${esc.renotifyMinutes >= 60 ? esc.renotifyMinutes/60+" h" : esc.renotifyMinutes+" min"} while open`
+      : `<b>Hotline on standby</b> <span class="who">Larry, Quennie</span><br>Nobody has been paged.`;
 
-  // tab counts
-  const cnt=(f)=>ev.data.filter(t=>t.flow===f&&t.status==="error"&&!t.resolvedAt).length;
-  [["s2n","S2N"],["n2s","N2S"],["idx","IDX"],["ns","NS"]].forEach(([id,f])=>{const n=cnt(f);const el=$("c_"+id);el.textContent=n;el.className="count"+(n?" bad":"");});
-  const alerts=buildAlerts(ev,inR); $("c_alerts").textContent=alerts.length; $("c_alerts").className="count"+(alerts.filter(a=>a.level>=1).length?" bad":"");
+    // Severity tiles
+    const defs = ["No blocking errors, heartbeat fresh","One transaction blocked by mapping / indexing","More than one blocked, opened today","More than one blocked, unresolved into day 2","Tool down — nothing flowing"];
+    $("sevTiles").innerHTML = [0,1,2,3,4].map(l =>
+      `<div class="card sevtile" data-lvl="${l}"><span class="lbl">${sevName[l]}</span><span class="n ${l===sev?"":"zero"}">${l===sev?(l===0?"✓":l===4?"DOWN":ob.length):"—"}</span><span class="def">${defs[l]}</span></div>`
+    ).join("");
 
-  // flow panels
-  flowPanel("p_s2n","S2N",inR,ev,"Orders synced from Shopify into NetSuite. Blocking errors here mean an order is sitting in Shopify with no NetSuite sales order.");
-  flowPanel("p_n2s","N2S",inR,ev,"Draft orders, fulfillments and inventory pushed from NetSuite to Shopify. Includes SO re-run messages.");
-  flowPanel("p_idx","IDX",inR,ev,"Indexing keeps the cross-reference between Shopify and NetSuite objects. A failed or skipped index is what later becomes a MAP-* error on an order.");
-  nsPanel(inR,ev);
-  alertsPanel(alerts);
+    // Flow cards
+    $("flowCards").innerHTML = Object.keys(FLOWS).map(f => {
+      const fs = overview.flowStats[f] || {};
+      const lvl = overview.perFlowSeverity[f] || 0;
+      const nsOpen = f === "NS" ? (openIncidents.incidents || []).filter(i => i.flow_code === "NS").length : 0;
+      const pill = f === "NS"
+        ? (nsOpen > 0 ? `<span class="pill warnp">${nsOpen} open</span>` : `<span class="pill ok">Clear</span>`)
+        : `<span class="pill ${pillCls(lvl)}">${sevName[lvl]}</span>`;
+      const sparkPts = overview.sparklines[f] || [];
+      return `<div class="card flow"><div class="head"><div><div class="name">${FLOWS[f].name}</div><div class="dir">${FLOWS[f].dir}</div></div>${pill}</div>
+        <div class="nums"><div>Processed<b>${fs.total||0}</b></div><div>Errors<b class="${fs.errored?"err":""}">${fs.errored||0}</b></div><div>Pending / re-run<b>${fs.pending_rerun||0}</b></div></div>${sparkSVG(sparkPts)}</div>`;
+    }).join("");
+
+    // Trend chart
+    trendChart(trendData.buckets || []);
+    $("chartHint").textContent = range.key === "today" ? "today, by hour" : `${dates.startDate} – ${dates.endDate}, by day`;
+
+    // Category breakdown
+    const cats = errorCats.categories || [];
+    const mx = cats.length ? cats[0].count : 1;
+    $("catBreak").innerHTML = cats.length ? cats.map(c =>
+      `<div style="margin:8px 0"><div style="display:flex;justify-content:space-between;gap:8px"><span><span class="cat ${c.is_blocking?"block":""}">${c.error_code||"?"}</span> <span class="muted">${c.category_label||""}</span></span><b style="font-variant-numeric:tabular-nums">${c.count}</b></div><div class="bar-inline"><i style="width:${c.count/mx*100}%;background:${c.is_blocking?"var(--warn)":"var(--s2)"}"></i></div></div>`
+    ).join("") : `<div class="empty">No errors in this range.</div>`;
+
+    // Open incidents table
+    $("openTable").innerHTML = incidentTable(openIncidents.incidents || [], true);
+
+    // Tab counts (open incidents per flow)
+    const incidents = openIncidents.incidents || [];
+    [["s2n","S2N"],["n2s","N2S"],["idx","IDX"],["ns","NS"]].forEach(([id,f]) => {
+      const n = incidents.filter(i => i.flow_code === f).length;
+      const el = $("c_"+id); el.textContent = n; el.className = "count" + (n ? " bad" : "");
+    });
+    const alerts = alertsData.alerts || [];
+    $("c_alerts").textContent = alerts.length;
+    $("c_alerts").className = "count" + (alerts.filter(a => a.level >= 1).length ? " bad" : "");
+
+    // Flow panels (fetch per-flow detail lazily)
+    await Promise.all([
+      renderFlowPanel("p_s2n", "S2N", dates, "Orders synced from Shopify into NetSuite. Blocking errors here mean an order is sitting in Shopify with no NetSuite sales order."),
+      renderFlowPanel("p_n2s", "N2S", dates, "Draft orders, fulfillments and inventory pushed from NetSuite to Shopify. Includes SO re-run messages."),
+      renderFlowPanel("p_idx", "IDX", dates, "Indexing keeps the cross-reference between Shopify and NetSuite objects. A failed or skipped index is what later becomes a MAP-* error on an order."),
+      renderNSPanel(dates),
+    ]);
+
+    // Alerts panel
+    alertsPanel(alerts);
+
+  } catch (err) {
+    console.error("Dashboard render failed:", err);
+    tag.textContent = "API error – check console";
+    tag.style.background = "var(--crit-soft)";
+    tag.style.color = "var(--crit-ink)";
+  }
 }
-function incidentTable(rows,showFlow){
-  if(!rows.length)return `<div class="empty">Nothing open. All transactions in this scenario have completed or been resolved.</div>`;
-  return `<table><thead><tr>${showFlow?"<th>Flow</th>":""}<th>Transaction</th><th>Type</th><th>Category</th><th>Message</th><th>Opened</th><th>Age</th><th>Level</th><th>Owner</th></tr></thead><tbody>${rows.map(t=>{
-    const r=t.category?CATEGORY_RULES.find(x=>x.code===t.category):null; const blocking=r&&isBlocking(r); const age=now-t.ts; const over=age>RULES.thresholds["pending.unresolvedHours"]*3600000;
-    const lvl=t.status==="pending"?"Pending":blocking?(t.ts<startOfToday?"Sev 3 input":"Blocking"):"NetSuite";
-    const owner=blocking?"Larry / Quennie":t.status==="pending"?"Auto-retry":"NetSuite admin";
-    return `<tr>${showFlow?`<td>${FLOWS[t.flow].name}</td>`:""}<td class="mono">${t.entity}</td><td>${t.type}</td><td>${r?`<span class="cat ${blocking?"block":""}">${r.code}</span>`:'<span class="muted">—</span>'}</td><td>${t.message||'<span class="muted">Awaiting acknowledgement from target system</span>'}</td><td class="muted">${fmtT(t.ts)}</td><td class="age ${over?"over":""}">${fmtAge(age)}${over?" · SLA":""}</td><td>${lvl}</td><td class="muted">${owner}</td></tr>`;}).join("")}</tbody></table>`;
+
+function incidentTable(rows, showFlow) {
+  if (!rows.length) return `<div class="empty">Nothing open. All transactions have completed or been resolved.</div>`;
+  return `<table><thead><tr>${showFlow?"<th>Flow</th>":""}<th>Transaction</th><th>Type</th><th>Category</th><th>Message</th><th>Opened</th><th>Age</th><th>Level</th><th>Owner</th></tr></thead><tbody>${rows.map(t => {
+    const blocking = t.is_blocking;
+    const ageMin = t.age_minutes || 0;
+    const over = ageMin > (RULES.thresholds?.["pending.unresolvedHours"] || 4) * 60;
+    const lvl = blocking ? (new Date(t.occurred_at) < startOfToday ? "Sev 3 input" : "Blocking") : "NetSuite";
+    const owner = blocking ? "Larry / Quennie" : "NetSuite admin";
+    const flowName = FLOWS[t.flow_code]?.name || t.flow_code;
+    return `<tr>${showFlow?`<td>${flowName}</td>`:""}<td class="mono">${t.entity_identifier||""}</td><td>${t.transaction_type||""}</td><td>${t.error_code?`<span class="cat ${blocking?"block":""}">${t.error_code}</span>`:'<span class="muted">—</span>'}</td><td>${t.error_message||t.raw_error||'<span class="muted">—</span>'}</td><td class="muted">${fmtT(t.occurred_at)}</td><td class="age ${over?"over":""}">${fmtAge(ageMin)}${over?" · SLA":""}</td><td>${lvl}</td><td class="muted">${owner}</td></tr>`;
+  }).join("")}</tbody></table>`;
 }
-function kpi(label,v,d,cls){return `<div class="card kpi"><h3>${label}</h3><div class="v ${cls||""}">${v}</div><div class="d">${d||""}</div></div>`;}
-function flowPanel(id,f,inR,ev,intro){
-  const rows=inR.filter(t=>t.flow===f); const ok=rows.filter(t=>t.status==="success").length, er=rows.filter(t=>t.status==="error"), pe=rows.filter(t=>t.status==="pending").length, rr=rows.filter(t=>t.rerun).length, rrOk=rows.filter(t=>t.rerun&&t.resolvedAt).length;
-  const open=ev.data.filter(t=>t.flow===f&&((t.status==="error"&&!t.resolvedAt)||t.status==="pending")).sort((a,b)=>b.ts-a.ts);
-  const rate=rows.length?((ok/rows.length)*100).toFixed(1)+"%":"—";
-  const thr=RULES.thresholds[f+".errors"];
-  const cats={}; er.forEach(t=>cats[t.category]=(cats[t.category]||0)+1);
-  const extra=f==="IDX"?kpi("New index records",rows.filter(t=>t.type!=="Item"&&t.status==="success").length,"added in range")+kpi("Index failures",er.length,`threshold ${RULES.thresholds["IDX.failed"]}/day`,er.length>RULES.thresholds["IDX.failed"]?"warnv":""):kpi("SO re-runs",rr,`${rrOk} succeeded · threshold ${RULES.thresholds["S2N.rerun"]}/day`,rr>RULES.thresholds["S2N.rerun"]?"warnv":"");
-  $(id).innerHTML=`<div class="section-title">${FLOWS[f].name} <span class="pill ${pillCls(ev.perFlow[f])}">${sevName[ev.perFlow[f]]}</span><span class="hint">${intro}</span></div>
-    <div class="row kpi">${kpi("Processed",rows.length,"in selected range")}${kpi("Succeeded",ok,rate+" success rate")}${kpi("Errored",er.length,thr?`threshold ${thr}/day`:"",thr&&er.length>thr?"bad":"")}${kpi("Pending",pe,"awaiting target system")}${extra}</div>
-    <div class="row two"><div class="card"><h3>Error categories <span class="hint">in range</span></h3>${Object.keys(cats).length?`<table><thead><tr><th>Code</th><th>Meaning</th><th class="num">Count</th><th>Group</th></tr></thead><tbody>${Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>{const r=CATEGORY_RULES.find(x=>x.code===c);return `<tr><td><span class="cat ${isBlocking(r)?"block":""}">${c}</span></td><td>${r.label}</td><td class="num">${n}</td><td class="muted">${isBlocking(r)?"Drives severity":r.group==="TRANSIENT"?"Auto-retried":"Threshold only"}</td></tr>`;}).join("")}</tbody></table>`:`<div class="empty">No errors in range.</div>`}</div>
-    <div class="card"><h3>Daily breakdown</h3>${dailyTable(rows)}</div></div>
-    <div class="card"><h3>Open / needs follow-up <span class="hint">regardless of range</span></h3><div class="tablewrap">${incidentTable(open,false)}</div></div>`;
+
+function kpi(label, v, d, cls) {
+  return `<div class="card kpi"><h3>${label}</h3><div class="v ${cls||""}">${v}</div><div class="d">${d||""}</div></div>`;
 }
-function dailyTable(rows){
-  const byDay={}; rows.forEach(t=>{const k=dayStart(t.ts).getTime();byDay[k]=byDay[k]||{ok:0,er:0,rr:0};if(t.status==="success")byDay[k].ok++;else if(t.status==="error")byDay[k].er++;if(t.rerun)byDay[k].rr++;});
-  const ks=Object.keys(byDay).sort((a,b)=>b-a).slice(0,10);
-  return `<div class="tablewrap"><table><thead><tr><th>Day</th><th class="num">OK</th><th class="num">Errors</th><th class="num">Re-runs</th></tr></thead><tbody>${ks.map(k=>`<tr><td>${fmtD(new Date(+k))}</td><td class="num">${byDay[k].ok}</td><td class="num ${byDay[k].er?"":"muted"}">${byDay[k].er}</td><td class="num muted">${byDay[k].rr}</td></tr>`).join("")}</tbody></table></div>`;
+
+async function renderFlowPanel(id, f, dates, intro) {
+  try {
+    const data = await fetchJSON(`/flows/${f}`, dates);
+    const k = data.kpi || {};
+    const thr = RULES.thresholds?.[f+".errors"];
+    const cats = data.categories || [];
+    const daily = data.daily || [];
+    const open = data.openIncidents || [];
+    const lvl = data.severity || 0;
+
+    const extra = f === "IDX"
+      ? kpi("Index failures", k.errored||0, `threshold ${RULES.thresholds?.["IDX.failed"]||3}/day`, (k.errored||0) > (RULES.thresholds?.["IDX.failed"]||3) ? "warnv" : "")
+      : kpi("SO re-runs", k.reruns||0, `${k.reruns_succeeded||0} succeeded · threshold ${RULES.thresholds?.["S2N.rerun"]||10}/day`, (k.reruns||0) > (RULES.thresholds?.["S2N.rerun"]||10) ? "warnv" : "");
+
+    $(id).innerHTML = `<div class="section-title">${FLOWS[f].name} <span class="pill ${pillCls(lvl)}">${sevName[lvl]}</span><span class="hint">${intro}</span></div>
+      <div class="row kpi">${kpi("Processed", k.total||0, "in selected range")}${kpi("Succeeded", k.succeeded||0, (k.successRate||"—")+" success rate")}${kpi("Errored", k.errored||0, thr?`threshold ${thr}/day`:"", thr&&(k.errored||0)>thr?"bad":"")}${kpi("Pending", k.pending||0, "awaiting target system")}${extra}</div>
+      <div class="row two"><div class="card"><h3>Error categories <span class="hint">in range</span></h3>${cats.length?`<table><thead><tr><th>Code</th><th>Meaning</th><th class="num">Count</th><th>Group</th></tr></thead><tbody>${cats.map(c=>`<tr><td><span class="cat ${c.is_blocking?"block":""}">${c.error_code}</span></td><td>${c.category_label||""}</td><td class="num">${c.count}</td><td class="muted">${c.is_blocking?"Drives severity":c.error_group==="TRANSIENT"?"Auto-retried":"Threshold only"}</td></tr>`).join("")}</tbody></table>`:`<div class="empty">No errors in range.</div>`}</div>
+      <div class="card"><h3>Daily breakdown</h3>${dailyTableHTML(daily)}</div></div>
+      <div class="card"><h3>Open / needs follow-up <span class="hint">regardless of range</span></h3><div class="tablewrap">${incidentTable(open, false)}</div></div>`;
+  } catch (err) {
+    $(id).innerHTML = `<div class="empty">Error loading ${f} data: ${err.message}</div>`;
+  }
 }
-function nsPanel(inR,ev){
-  const rows=inR.filter(t=>t.flow==="NS"); const er=rows.filter(t=>t.status==="error"); const cats={}; er.forEach(t=>cats[t.category]=(cats[t.category]||0)+1);
-  const open=ev.data.filter(t=>t.flow==="NS"&&t.status==="error"&&!t.resolvedAt).sort((a,b)=>b.ts-a.ts);
-  $("p_nsint").innerHTML=`<div class="section-title">NetSuite internal log <span class="hint">transactions that reached NetSuite but failed inside it — Vertex, inventory, validation, permissions. Not integration faults; tracked against per-category thresholds.</span></div>
-    <div class="row kpi">${kpi("Transactions posted",rows.length,"in range")}${kpi("Passed",rows.filter(t=>t.status==="success").length,"posted cleanly")}${kpi("Failed in NetSuite",er.length,"see categories")}${["TAX-VERTEX","INV-ITEM","VAL-DATA"].map(c=>{const n=cats[c]||0,th=RULES.thresholds["NS."+c];return kpi(CATEGORY_RULES.find(x=>x.code===c).label,n,`threshold ${th}/day`,n>th?"warnv":"");}).join("")}</div>
-    <div class="row two"><div class="card"><h3>Failures by category</h3>${Object.keys(cats).length?`<table><thead><tr><th>Code</th><th>Meaning</th><th class="num">Count</th><th class="num">Threshold</th><th>State</th></tr></thead><tbody>${Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>{const r=CATEGORY_RULES.find(x=>x.code===c);const th=RULES.thresholds["NS."+c];return `<tr><td><span class="cat">${c}</span></td><td>${r.label}</td><td class="num">${n}</td><td class="num muted">${th||"—"}</td><td>${th&&n>th?'<span class="pill warnp">Over threshold</span>':'<span class="pill ok">Within</span>'}</td></tr>`;}).join("")}</tbody></table>`:`<div class="empty">No NetSuite-side failures in range.</div>`}</div>
-    <div class="card"><h3>Daily breakdown</h3>${dailyTable(rows)}</div></div>
-    <div class="card"><h3>Open NetSuite errors <span class="hint">owner: NetSuite admin, not the integration hotline</span></h3><div class="tablewrap">${incidentTable(open,false)}</div></div>`;
+
+async function renderNSPanel(dates) {
+  try {
+    const data = await fetchJSON('/flows/NS', dates);
+    const k = data.kpi || {};
+    const cats = data.categories || {};
+    const daily = data.daily || [];
+    const open = data.openIncidents || [];
+
+    // Build cats map
+    const catMap = {};
+    (Array.isArray(cats) ? cats : []).forEach(c => { catMap[c.error_code] = c.count; });
+
+    $("p_nsint").innerHTML = `<div class="section-title">NetSuite internal log <span class="hint">transactions that reached NetSuite but failed inside it — Vertex, inventory, validation, permissions. Not integration faults; tracked against per-category thresholds.</span></div>
+      <div class="row kpi">${kpi("Transactions posted", k.total||0, "in range")}${kpi("Passed", k.succeeded||0, "posted cleanly")}${kpi("Failed in NetSuite", k.errored||0, "see categories")}${["TAX-VERTEX","INV-ITEM","VAL-DATA"].map(c => {
+        const n = catMap[c] || 0;
+        const th = RULES.thresholds?.["NS."+c] || 0;
+        const cat = CATEGORY_RULES.find(x => x.code === c);
+        return kpi(cat?.label || c, n, `threshold ${th}/day`, n > th ? "warnv" : "");
+      }).join("")}</div>
+      <div class="row two"><div class="card"><h3>Failures by category</h3>${(Array.isArray(cats) ? cats : []).length?`<table><thead><tr><th>Code</th><th>Meaning</th><th class="num">Count</th><th class="num">Threshold</th><th>State</th></tr></thead><tbody>${(Array.isArray(cats) ? cats : []).map(c => {
+        const th = RULES.thresholds?.["NS."+c.error_code];
+        return `<tr><td><span class="cat">${c.error_code}</span></td><td>${c.category_label||""}</td><td class="num">${c.count}</td><td class="num muted">${th||"—"}</td><td>${th&&c.count>th?'<span class="pill warnp">Over threshold</span>':'<span class="pill ok">Within</span>'}</td></tr>`;
+      }).join("")}</tbody></table>`:`<div class="empty">No NetSuite-side failures in range.</div>`}</div>
+      <div class="card"><h3>Daily breakdown</h3>${dailyTableHTML(daily)}</div></div>
+      <div class="card"><h3>Open NetSuite errors <span class="hint">owner: NetSuite admin, not the integration hotline</span></h3><div class="tablewrap">${incidentTable(open, false)}</div></div>`;
+  } catch (err) {
+    $("p_nsint").innerHTML = `<div class="empty">Error loading NS data: ${err.message}</div>`;
+  }
 }
-function buildAlerts(ev,inR){
-  const a=[]; const esc=RULES.escalation;
-  if(ev.overall>0){const e=esc[ev.overall];a.push({level:ev.overall,title:`Integration severity ${ev.overall}`,detail:ev.overall===4?"Connector heartbeat missing / zero throughput":`${ev.openBlocking.length} transaction(s) blocked by mapping / indexing`,to:e.notify,cc:e.cc,when:ev.openBlocking.length?new Date(Math.max(...ev.openBlocking.map(t=>t.ts))):now,renotify:e.renotifyMinutes,ids:ev.openBlocking.map(t=>t.entity)});}
-  const c=(f,s)=>inR.filter(t=>t.flow===f&&t.status===s).length;
-  const th=RULES.thresholds; const checks=[["S2N.errors",c("S2N","error"),"Shopify → NetSuite order errors"],["N2S.errors",c("N2S","error"),"NetSuite → Shopify draft/order errors"],["S2N.rerun",inR.filter(t=>t.rerun&&t.flow!=="NS").length,"SO re-run messages"],["IDX.failed",c("IDX","error"),"Indexing failures"]];
-  ["TAX-VERTEX","INV-ITEM","VAL-DATA"].forEach(k=>checks.push(["NS."+k,inR.filter(t=>t.flow==="NS"&&t.category===k).length,"NetSuite: "+CATEGORY_RULES.find(x=>x.code===k).label]));
-  checks.forEach(([k,n,label])=>{if(n>th[k])a.push({level:0,title:`${label} over threshold`,detail:`${n} in range vs threshold ${th[k]}`,to:["Larry","Quennie"],cc:[],when:now,renotify:240,ids:[]});});
-  const stale=ev.data.filter(t=>t.status==="pending"&&now-t.ts>th["pending.unresolvedHours"]*3600000);
-  if(stale.length)a.push({level:0,title:"Pending transactions past SLA",detail:`${stale.length} pending longer than ${th["pending.unresolvedHours"]} h`,to:["Larry","Quennie"],cc:[],when:now,renotify:240,ids:stale.map(t=>t.entity)});
-  return a.sort((x,y)=>y.level-x.level);
+
+function dailyTableHTML(daily) {
+  if (!daily.length) return `<div class="empty">No data.</div>`;
+  return `<div class="tablewrap"><table><thead><tr><th>Day</th><th class="num">OK</th><th class="num">Errors</th><th class="num">Re-runs</th></tr></thead><tbody>${daily.map(d =>
+    `<tr><td>${fmtD(d.day)}</td><td class="num">${d.ok||0}</td><td class="num ${d.errors?"":"muted"}">${d.errors||0}</td><td class="num muted">${d.reruns||0}</td></tr>`
+  ).join("")}</tbody></table></div>`;
 }
-function alertsPanel(alerts){
-  $("p_alerts").innerHTML=`<div class="section-title">Alerts &amp; escalations <span class="hint">what would have been emailed, and to whom, under the current rules. One row per open incident — a refresh never re-sends.</span></div>
-   <div class="card tablewrap">${alerts.length?`<table><thead><tr><th>Level</th><th>Alert</th><th>Detail</th><th>Notify</th><th>Cc</th><th>Triggered</th><th>Re-notify</th><th>Transactions</th></tr></thead><tbody>${alerts.map(a=>`<tr><td><span class="pill ${a.level?pillCls(a.level):"warnp"}">${a.level?"Sev "+a.level:"Threshold"}</span></td><td><b>${a.title}</b></td><td>${a.detail}</td><td class="mono">${a.to.join(", ")}</td><td class="mono muted">${a.cc.join(", ")||"—"}</td><td class="muted">${fmtT(a.when)}</td><td class="muted">${a.renotify>=60?a.renotify/60+" h":a.renotify+" min"}</td><td class="mono muted">${a.ids.slice(0,4).join(", ")}${a.ids.length>4?` +${a.ids.length-4}`:""}</td></tr>`).join("")}</tbody></table>`:`<div class="empty">No alerts. Nothing has crossed a severity rule or a threshold.</div>`}</div>
+
+function alertsPanel(alerts) {
+  $("p_alerts").innerHTML = `<div class="section-title">Alerts &amp; escalations <span class="hint">what would have been emailed, and to whom, under the current rules. One row per open incident — a refresh never re-sends.</span></div>
+   <div class="card tablewrap">${alerts.length?`<table><thead><tr><th>Level</th><th>Alert</th><th>Detail</th><th>Notify</th><th>Cc</th><th>Triggered</th><th>Re-notify</th><th>Transactions</th></tr></thead><tbody>${alerts.map(a =>
+    `<tr><td><span class="pill ${a.level?pillCls(a.level):"warnp"}">${a.level?"Sev "+a.level:"Threshold"}</span></td><td><b>${a.title}</b></td><td>${a.detail}</td><td class="mono">${(a.notify||a.to||[]).join(", ")}</td><td class="mono muted">${(a.cc||[]).join(", ")||"—"}</td><td class="muted">${fmtT(a.when)}</td><td class="muted">${(a.renotifyMinutes||a.renotify||0)>=60?(a.renotifyMinutes||a.renotify)/60+" h":(a.renotifyMinutes||a.renotify)+" min"}</td><td class="mono muted">${(a.ids||[]).slice(0,4).join(", ")}${(a.ids||[]).length>4?` +${a.ids.length-4}`:""}</td></tr>`
+  ).join("")}</tbody></table>`:`<div class="empty">No alerts. Nothing has crossed a severity rule or a threshold.</div>`}</div>
    <div class="section-title" style="margin-top:18px">Email template <span class="hint">fields Larry's alert job fills in</span></div>
    <pre>Subject: [SEV {level}] {flow} – {category}: {count} transaction(s) blocked
 
@@ -591,40 +583,112 @@ Escalated to:    {notify}   Cc: {cc}
 Next reminder:   in {renotifyMinutes} min unless resolved or level changes</pre>`;
 }
 
-/* sparkline: last 14 days of errors for a flow */
-function spark(f,data){
-  const pts=[];for(let d=13;d>=0;d--){const day=new Date(startOfToday);day.setDate(day.getDate()-d);const nx=new Date(day);nx.setDate(nx.getDate()+1);pts.push(data.filter(t=>t.flow===f&&t.ts>=day&&t.ts<nx&&t.status==="error").length);}
-  const mx=Math.max(1,...pts);const w=200,h=44;const x=i=>i/(pts.length-1)*w;const y=v=>h-4-v/mx*(h-10);
-  const path=pts.map((v,i)=>(i?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1)).join(" ");
+/* sparkline SVG from array of numbers */
+function sparkSVG(pts) {
+  if (!pts || !pts.length) return '';
+  const mx = Math.max(1, ...pts);
+  const w = 200, h = 44;
+  const x = i => i / (pts.length - 1) * w;
+  const y = v => h - 4 - v / mx * (h - 10);
+  const path = pts.map((v,i) => (i?"L":"M") + x(i).toFixed(1) + " " + y(v).toFixed(1)).join(" ");
   return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-label="errors per day, last 14 days"><path d="${path} L${w} ${h} L0 ${h}Z" fill="var(--s2)" opacity=".12"/><path d="${path}" fill="none" stroke="var(--s2)" stroke-width="2" vector-effect="non-scaling-stroke"/><circle cx="${w}" cy="${y(pts[pts.length-1])}" r="3.5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/></svg><div class="muted" style="font-size:11px;margin-top:-4px">Errors per day, last 14 days · today ${pts[pts.length-1]}</div>`;
 }
-/* stacked bar trend */
-function trend(inR){
-  const svg=$("trend"); const W=720,H=220,pl=34,pr=8,pt=10,pb=26;
-  let buckets;
-  if(range.key==="today"){buckets=[];for(let h=6;h<=now.getHours();h++){const a=new Date(startOfToday);a.setHours(h);const b=new Date(a);b.setHours(h+1);buckets.push({label:(h%12||12)+(h<12?"a":"p"),a,b});}}
-  else{const {from,to}=rangeBounds();buckets=[];for(let d=new Date(from);d<=to;d.setDate(d.getDate()+1)){const a=new Date(d);const b=new Date(d);b.setDate(b.getDate()+1);buckets.push({label:fmtD(a),a,b});}}
-  const rows=buckets.map(bk=>{const r=inR.filter(t=>t.flow!=="NS"&&t.ts>=bk.a&&t.ts<bk.b);return {...bk,ok:r.filter(t=>t.status==="success").length,er:r.filter(t=>t.status==="error").length,pe:r.filter(t=>t.status==="pending"||t.status==="rerun").length};});
-  const mx=Math.max(1,...rows.map(r=>r.ok+r.er+r.pe)); const nice=Math.ceil(mx/ (mx>200?100:mx>50?25:10))*(mx>200?100:mx>50?25:10);
-  const iw=W-pl-pr, ih=H-pt-pb; const bw=iw/rows.length; const gap=Math.min(6,bw*0.25); const y=v=>pt+ih-v/nice*ih;
-  let s=""; for(let i=0;i<=4;i++){const v=nice*i/4;s+=`<line x1="${pl}" x2="${W-pr}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/><text x="${pl-6}" y="${y(v)+4}" text-anchor="end">${v}</text>`;}
-  const every=Math.ceil(rows.length/12);
-  rows.forEach((r,i)=>{const x=pl+i*bw+gap/2, w=bw-gap; let base=0;
-    [["ok","var(--s1)"],["er","var(--s2)"],["pe","var(--s3)"]].forEach(([k,c])=>{if(!r[k])return;const y0=y(base+r[k]),y1=y(base);s+=`<rect x="${x}" y="${y0+(base?1:0)}" width="${w}" height="${Math.max(0,y1-y0-(base?1:0))}" fill="${c}" rx="${k==="pe"||(k==="er"&&!r.pe)||(k==="ok"&&!r.er&&!r.pe)?2:0}"/>`;base+=r[k];});
-    s+=`<rect class="hit" data-i="${i}" x="${pl+i*bw}" y="${pt}" width="${bw}" height="${ih}" fill="transparent"/>`;
-    if(i%every===0)s+=`<text x="${x+w/2}" y="${H-8}" text-anchor="middle">${r.label}</text>`;});
-  s+=`<line x1="${pl}" x2="${W-pr}" y1="${pt+ih}" y2="${pt+ih}" stroke="var(--axis)"/>`;
-  svg.innerHTML=s;
-  const tip=$("tip"); const wrap=svg.parentElement;
-  svg.querySelectorAll(".hit").forEach(el=>{el.addEventListener("mousemove",e=>{const r=rows[+el.dataset.i];tip.style.display="block";tip.innerHTML=`<b>${r.label}</b> · ${r.ok+r.er+r.pe} total<br>Succeeded ${r.ok} · Errored ${r.er} · Pending/re-run ${r.pe}`;const b=wrap.getBoundingClientRect();tip.style.left=Math.min(e.clientX-b.left+12,b.width-tip.offsetWidth-8)+"px";tip.style.top=(e.clientY-b.top-40)+"px";});el.addEventListener("mouseleave",()=>tip.style.display="none");});
+
+/* stacked bar trend chart */
+function trendChart(buckets) {
+  const svg = $("trend");
+  if (!buckets.length) { svg.innerHTML = ''; return; }
+  const W=720, H=220, pl=34, pr=8, pt=10, pb=26;
+  const rows = buckets;
+  const mx = Math.max(1, ...rows.map(r => (r.ok||0)+(r.er||0)+(r.pe||0)));
+  const nice = Math.ceil(mx / (mx>200?100:mx>50?25:10)) * (mx>200?100:mx>50?25:10);
+  const iw = W-pl-pr, ih = H-pt-pb;
+  const bw = iw / rows.length;
+  const gap = Math.min(6, bw*0.25);
+  const y = v => pt + ih - v/nice*ih;
+  let s = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = nice*i/4;
+    s += `<line x1="${pl}" x2="${W-pr}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/><text x="${pl-6}" y="${y(v)+4}" text-anchor="end">${v}</text>`;
+  }
+  const every = Math.ceil(rows.length / 12);
+  rows.forEach((r, i) => {
+    const x = pl + i*bw + gap/2, w = bw - gap;
+    let base = 0;
+    [["ok","var(--s1)"],["er","var(--s2)"],["pe","var(--s3)"]].forEach(([k,c]) => {
+      if (!r[k]) return;
+      const y0 = y(base+r[k]), y1 = y(base);
+      s += `<rect x="${x}" y="${y0+(base?1:0)}" width="${w}" height="${Math.max(0,y1-y0-(base?1:0))}" fill="${c}" rx="${k==="pe"||(k==="er"&&!r.pe)||(k==="ok"&&!r.er&&!r.pe)?2:0}"/>`;
+      base += r[k];
+    });
+    s += `<rect class="hit" data-i="${i}" x="${pl+i*bw}" y="${pt}" width="${bw}" height="${ih}" fill="transparent"/>`;
+    if (i % every === 0) s += `<text x="${x+w/2}" y="${H-8}" text-anchor="middle">${r.label}</text>`;
+  });
+  s += `<line x1="${pl}" x2="${W-pr}" y1="${pt+ih}" y2="${pt+ih}" stroke="var(--axis)"/>`;
+  svg.innerHTML = s;
+  const tip = $("tip"), wrap = svg.parentElement;
+  svg.querySelectorAll(".hit").forEach(el => {
+    el.addEventListener("mousemove", e => {
+      const r = rows[+el.dataset.i];
+      tip.style.display = "block";
+      tip.innerHTML = `<b>${r.label}</b> · ${(r.ok||0)+(r.er||0)+(r.pe||0)} total<br>Succeeded ${r.ok||0} · Errored ${r.er||0} · Pending/re-run ${r.pe||0}`;
+      const b = wrap.getBoundingClientRect();
+      tip.style.left = Math.min(e.clientX - b.left + 12, b.width - tip.offsetWidth - 8) + "px";
+      tip.style.top = (e.clientY - b.top - 40) + "px";
+    });
+    el.addEventListener("mouseleave", () => tip.style.display = "none");
+  });
 }
 
 /* ---------- controls ---------- */
-$("rangeSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;[...$("rangeSeg").children].forEach(x=>x.setAttribute("aria-pressed",x===b));range.key=b.dataset.r;$("customRange").classList.toggle("on",range.key==="custom");if(range.key==="custom"){const f=new Date(startOfToday);f.setDate(f.getDate()-13);$("fromD").valueAsDate=f;$("toD").valueAsDate=startOfToday;range.from=f;range.to=startOfToday;}render();});
-["fromD","toD"].forEach(id=>$(id).addEventListener("change",()=>{const f=$("fromD").valueAsDate,t=$("toD").valueAsDate;if(f&&t&&f<=t){range.from=new Date(f.getTime()+f.getTimezoneOffset()*60000);range.to=new Date(t.getTime()+t.getTimezoneOffset()*60000);render();}}));
-$("scenario").addEventListener("change",render);
-$("tabs").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;tab=b.dataset.t;[...$("tabs").children].forEach(x=>x.setAttribute("aria-selected",x===b));document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("on",p.id==="p_"+tab));});
-render();
+$("rangeSeg").addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  [...$("rangeSeg").children].forEach(x => x.setAttribute("aria-pressed", x === b));
+  range.key = b.dataset.r;
+  $("customRange").classList.toggle("on", range.key === "custom");
+  if (range.key === "custom") {
+    const f = new Date(startOfToday); f.setDate(f.getDate()-13);
+    $("fromD").valueAsDate = f;
+    $("toD").valueAsDate = startOfToday;
+    range.from = f; range.to = startOfToday;
+  }
+  render();
+});
+["fromD","toD"].forEach(id => $(id).addEventListener("change", () => {
+  const f = $("fromD").valueAsDate, t = $("toD").valueAsDate;
+  if (f && t && f <= t) {
+    range.from = new Date(f.getTime() + f.getTimezoneOffset()*60000);
+    range.to = new Date(t.getTime() + t.getTimezoneOffset()*60000);
+    render();
+  }
+}));
+$("tabs").addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  tab = b.dataset.t;
+  [...$("tabs").children].forEach(x => x.setAttribute("aria-selected", x === b));
+  document.querySelectorAll(".panel").forEach(p => p.classList.toggle("on", p.id === "p_" + tab));
+});
+
+/* ---------- init ---------- */
+(async function init() {
+  // Load rules/categories from API
+  try {
+    const rulesData = await fetchJSON('/rules');
+    CATEGORY_RULES = rulesData.categories || [];
+    RULES = rulesData.rules || RULES;
+    $("ruleJson").textContent = JSON.stringify(RULES, null, 2);
+    $("catTable").innerHTML = CATEGORY_RULES.map(c =>
+      `<tr><td><span class="cat ${c.group==="MAPPING"||c.group==="INDEXING"?"block":c.group==="OUTAGE"?"down":""}">${c.code}</span></td><td>${c.label}</td><td class="muted">${c.group}</td><td><code>/${c.match}/i</code></td></tr>`
+    ).join("");
+  } catch (e) {
+    console.warn("Could not load rules from API, using defaults:", e);
+  }
+  // Set default range button
+  [...$("rangeSeg").children].forEach(x => x.setAttribute("aria-pressed", x.dataset.r === range.key));
+  render();
+})();
 </script>
 
 </body>

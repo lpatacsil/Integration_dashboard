@@ -18,5 +18,22 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build: ./api
+    container_name: integration_monitor_api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${POSTGRES_DB}
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      API_PORT: "3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
