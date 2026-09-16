@@ -6,19 +6,27 @@ export const FLOWS: Record<string, { name: string; dir: string }> = {
 };
 
 export const CATEGORY_RULES = [
-  { code: 'MAP-CUST',   group: 'MAPPING',   label: 'Customer not mapped / indexed',           match: 'customer.*(not (found|mapped)|missing)' },
-  { code: 'MAP-ITEM',   group: 'MAPPING',   label: 'Item / SKU not mapped',                   match: '(item|sku).*(not (found|mapped)|invalid)' },
-  { code: 'MAP-SHIP',   group: 'MAPPING',   label: 'Ship-to address not mapped',              match: '(ship.?to|address).*(not (found|mapped)|invalid)' },
+  { code: 'MAP-CUST',   group: 'MAPPING',   label: 'Customer not mapped / indexed',           match: 'customer.*(not (found|mapped)|missing)|enter a value for.*entity|Entity Id.*invalid' },
+  { code: 'MAP-ITEM',   group: 'MAPPING',   label: 'Item / SKU not mapped',                   match: '(item|sku).*(not (found|mapped)|invalid)|choose an item|at least one line item|Invalid Field Value.*item|sub-resource field \'item\'' },
+  { code: 'MAP-SHIP',   group: 'MAPPING',   label: 'Ship-to address not mapped',              match: '(ship.?to|address).*(not (found|mapped)|invalid)|Ship To Select' },
   { code: 'MAP-LOC',    group: 'MAPPING',   label: 'Location / store not mapped',             match: '(location|store|shop).*(not (found|mapped))' },
   { code: 'IDX-SKIP',   group: 'INDEXING',  label: 'Record skipped by indexing',              match: 'skipped|no index|not indexed' },
   { code: 'TAX-VERTEX', group: 'NETSUITE',  label: 'Vertex tax calculation failed',           match: 'vertex|tax (calc|service)' },
   { code: 'INV-ITEM',   group: 'NETSUITE',  label: 'Inventory item not recognized / short',   match: 'inventory|insufficient|not recognized' },
   { code: 'NS-PERM',    group: 'NETSUITE',  label: 'Permission / role error',                 match: 'permission|role|insufficient privilege' },
-  { code: 'VAL-DATA',   group: 'NETSUITE',  label: 'Validation / missing required field',     match: 'required|invalid value|validation' },
-  { code: 'API-RATE',   group: 'TRANSIENT', label: 'Rate limit / timeout (auto-retry)',       match: 'rate limit|429|timeout|timed out' },
+  { code: 'VAL-DATA',   group: 'NETSUITE',  label: 'Validation / missing required field',     match: 'INVALID_VALUE|FIELD_PARAM_REQD|unable to parse|Integer field|fulfilled.*delete|otherrefnum|maximum number|required|validation' },
+  { code: 'API-RATE',   group: 'TRANSIENT', label: 'Rate limit / timeout (auto-retry)',       match: 'rate limit|429|timeout|timed out|Request Failed|UNEXPECTED_ERROR|Record has been changed|someone.*saving|Primary.?Key|NONEXISTENT_ID' },
   { code: 'DUP',        group: 'TRANSIENT', label: 'Duplicate record suppressed',             match: 'duplicate|already exists' },
   { code: 'CONN-DOWN',  group: 'OUTAGE',    label: 'Connector heartbeat missing',             match: 'heartbeat|connector offline' },
 ];
+
+export const CONTACTS: Record<string, { name: string; email: string }> = {
+  Larry:    { name: 'Larry Patacsil',    email: 'lpatacsil@bulkequip.com' },
+  Quennie:  { name: 'Quennie Barrameda', email: 'qbarrameda@bulkequip.com' },
+  Olga:     { name: 'Olga Corbett',      email: 'ocorbett@bulkequip.com' },
+  Estevan:  { name: 'Estevan Lima',      email: 'elima@bulkequip.com' },
+  Matt:     { name: 'Matthew Ispas',     email: 'mispas@bulkequip.com' },
+};
 
 export const RULES = {
   severity: {

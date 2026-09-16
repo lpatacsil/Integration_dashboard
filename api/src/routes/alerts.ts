@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
-import { RULES, CATEGORY_RULES } from '../config';
+import { RULES, CATEGORY_RULES, CONTACTS } from '../config';
 import { classify, OpenBlockingError } from '../severity';
 
 const router = Router();
@@ -43,6 +43,8 @@ router.get('/', async (req: Request, res: Response) => {
 
     // Build alerts
     const alerts: any[] = [];
+    const resolveContacts = (names: string[]) =>
+      names.map(n => CONTACTS[n] ? { key: n, ...CONTACTS[n] } : { key: n, name: n, email: '' });
 
     // Severity alert
     if (overallSeverity > 0) {
@@ -53,8 +55,8 @@ router.get('/', async (req: Request, res: Response) => {
         detail: overallSeverity === 4
           ? 'Connector heartbeat missing / zero throughput'
           : `${openBlocking.length} transaction(s) blocked by mapping / indexing`,
-        notify: esc.notify,
-        cc: esc.cc,
+        notify: resolveContacts(esc.notify),
+        cc: resolveContacts(esc.cc),
         when: openBlocking.length ? new Date(Math.max(...openBlocking.map(e => new Date(e.occurred_at).getTime()))).toISOString() : now.toISOString(),
         renotifyMinutes: esc.renotifyMinutes,
         ids: openBlocking.map(e => e.entity_identifier),
@@ -106,7 +108,7 @@ router.get('/', async (req: Request, res: Response) => {
           level: 0,
           title: `${label} over threshold`,
           detail: `${count} in range vs threshold ${threshold}`,
-          notify: ['Larry', 'Quennie'],
+          notify: resolveContacts(['Larry', 'Quennie']),
           cc: [],
           when: now.toISOString(),
           renotifyMinutes: 240,
@@ -127,7 +129,7 @@ router.get('/', async (req: Request, res: Response) => {
         level: 0,
         title: 'Pending transactions past SLA',
         detail: `${staleRes.rows[0].cnt} pending longer than ${RULES.thresholds['pending.unresolvedHours']} h`,
-        notify: ['Larry', 'Quennie'],
+        notify: resolveContacts(['Larry', 'Quennie']),
         cc: [],
         when: now.toISOString(),
         renotifyMinutes: 240,

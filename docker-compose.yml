@@ -19,7 +19,9 @@ services:
       retries: 5
 
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: integration_monitor_api
     restart: unless-stopped
     ports:
@@ -31,6 +33,17 @@ services:
       DB_USER: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       API_PORT: "3001"
+      NETSUITE_ACCOUNT_ID: ${NETSUITE_ACCOUNT_ID:-}
+      NETSUITE_CONSUMER_KEY: ${NETSUITE_CONSUMER_KEY:-}
+      NETSUITE_CONSUMER_SECRET: ${NETSUITE_CONSUMER_SECRET:-}
+      NETSUITE_TOKEN_ID: ${NETSUITE_TOKEN_ID:-}
+      NETSUITE_TOKEN_SECRET: ${NETSUITE_TOKEN_SECRET:-}
+      TEAMS_WEBHOOK_URL: ${TEAMS_WEBHOOK_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     depends_on:
       postgres:
         condition: service_healthy

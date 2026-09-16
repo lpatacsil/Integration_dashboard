@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import pool from '../db';
-import { FLOWS, RULES } from '../config';
+import { FLOWS, RULES, CONTACTS } from '../config';
 import { classify, classifyFlow, OpenBlockingError, startOfToday } from '../severity';
 
 const router = Router();
@@ -116,8 +116,15 @@ router.get('/', async (req: Request, res: Response) => {
       sparklines[f] = pts;
     }
 
-    // 9. Escalation info
-    const escalation = overallSeverity > 0 ? RULES.escalation[overallSeverity] : null;
+    // 9. Escalation info (resolve contact names to full name + email)
+    const resolveContacts = (names: string[]) =>
+      names.map(n => CONTACTS[n] ? { key: n, ...CONTACTS[n] } : { key: n, name: n, email: '' });
+    const rawEsc = overallSeverity > 0 ? RULES.escalation[overallSeverity] : null;
+    const escalation = rawEsc ? {
+      notify: resolveContacts(rawEsc.notify),
+      cc: resolveContacts(rawEsc.cc),
+      renotifyMinutes: rawEsc.renotifyMinutes,
+    } : null;
 
     res.json({
       severity: overallSeverity,
