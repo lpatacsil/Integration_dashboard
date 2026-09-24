@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { fetchJSON } from './composables/useApi'
 import { provideDateRange } from './composables/useDateRange'
 import { useAutoRefresh } from './composables/useAutoRefresh'
@@ -12,17 +12,24 @@ import type {
 import TopBar from './components/TopBar.vue'
 import HealthStrip from './components/HealthStrip.vue'
 import TabBar from './components/TabBar.vue'
+import SideBar from './components/SideBar.vue'
 import OverviewPanel from './components/OverviewPanel.vue'
 import FlowPanel from './components/FlowPanel.vue'
 import NsPanel from './components/NsPanel.vue'
-import AlertsPanel from './components/AlertsPanel.vue'
-import RulesPanel from './components/RulesPanel.vue'
+import AlertsSettings from './components/settings/AlertsSettings.vue'
+import RulesSettings from './components/settings/RulesSettings.vue'
+import ChannelsSettings from './components/settings/ChannelsSettings.vue'
+import ContactsSettings from './components/settings/ContactsSettings.vue'
 
 // Date range (provided to children via inject)
 const dateRange = provideDateRange()
 
-// Tab state
-const activeTab = ref('overview')
+// View state — supports both dashboard tabs and settings pages
+const activeView = ref('overview')
+
+const isDashboardView = computed(() =>
+  ['overview', 's2n', 'n2s', 'idx', 'nsint'].includes(activeView.value)
+)
 
 // Connection status
 const connectionStatus = ref<'connecting' | 'ok' | 'error'>('connecting')
@@ -132,69 +139,91 @@ onMounted(async () => {
 </script>
 
 <template>
-  <TopBar :connection-status="connectionStatus" />
-  <HealthStrip :severity="overview?.severity ?? 0" :overview="overview" />
-  <TabBar
-    :active-tab="activeTab"
+  <SideBar
+    :active-view="activeView"
     :incidents="openIncidents?.incidents ?? []"
     :alerts="alerts?.alerts ?? []"
-    @update:active-tab="activeTab = $event"
+    @update:active-view="activeView = $event"
   />
 
-  <!-- Panels -->
-  <OverviewPanel
-    v-if="activeTab === 'overview'"
-    :overview="overview"
-    :trends="trends"
-    :error-categories="errorCategories"
-    :open-incidents="openIncidents"
-    :rules="rules"
-    :chart-hint="chartHint"
-  />
+  <div class="app-content">
+    <TopBar :connection-status="connectionStatus" />
 
-  <FlowPanel
-    v-if="activeTab === 's2n'"
-    flow-code="S2N"
-    :data="flowData.S2N"
-    :rules="rules"
-    :intro="flowIntros.S2N"
-    :error="flowErrors.S2N"
-  />
+    <template v-if="isDashboardView">
+      <HealthStrip :severity="overview?.severity ?? 0" :overview="overview" />
+      <TabBar
+        :active-tab="activeView"
+        :incidents="openIncidents?.incidents ?? []"
+        :alerts="alerts?.alerts ?? []"
+        @update:active-tab="activeView = $event"
+      />
+    </template>
 
-  <FlowPanel
-    v-if="activeTab === 'n2s'"
-    flow-code="N2S"
-    :data="flowData.N2S"
-    :rules="rules"
-    :intro="flowIntros.N2S"
-    :error="flowErrors.N2S"
-  />
+    <!-- Dashboard panels -->
+    <OverviewPanel
+      v-if="activeView === 'overview'"
+      :overview="overview"
+      :trends="trends"
+      :error-categories="errorCategories"
+      :open-incidents="openIncidents"
+      :rules="rules"
+      :chart-hint="chartHint"
+    />
 
-  <FlowPanel
-    v-if="activeTab === 'idx'"
-    flow-code="IDX"
-    :data="flowData.IDX"
-    :rules="rules"
-    :intro="flowIntros.IDX"
-    :error="flowErrors.IDX"
-  />
+    <FlowPanel
+      v-if="activeView === 's2n'"
+      flow-code="S2N"
+      :data="flowData.S2N"
+      :rules="rules"
+      :intro="flowIntros.S2N"
+      :error="flowErrors.S2N"
+    />
 
-  <NsPanel
-    v-if="activeTab === 'nsint'"
-    :data="flowData.NS"
-    :rules="rules"
-    :category-rules="categoryRules"
-    :error="flowErrors.NS"
-  />
+    <FlowPanel
+      v-if="activeView === 'n2s'"
+      flow-code="N2S"
+      :data="flowData.N2S"
+      :rules="rules"
+      :intro="flowIntros.N2S"
+      :error="flowErrors.N2S"
+    />
 
-  <AlertsPanel
-    v-if="activeTab === 'alerts'"
-    :alerts="alerts?.alerts ?? []"
-  />
+    <FlowPanel
+      v-if="activeView === 'idx'"
+      flow-code="IDX"
+      :data="flowData.IDX"
+      :rules="rules"
+      :intro="flowIntros.IDX"
+      :error="flowErrors.IDX"
+    />
 
-  <RulesPanel
-    v-if="activeTab === 'rules'"
-    :rules="rules"
-    :category-rules="categoryRules"
-  />
+    <NsPanel
+      v-if="activeView === 'nsint'"
+      :data="flowData.NS"
+      :rules="rules"
+      :category-rules="categoryRules"
+      :error="flowErrors.NS"
+    />
+
+    <!-- Settings panels -->
+    <AlertsSettings
+      v-if="activeView === 'settings-alerts'"
+      :alerts="alerts?.alerts ?? []"
+    />
+
+    <RulesSettings
+      v-if="activeView === 'settings-rules'"
+      :rules="rules"
+      :category-rules="categoryRules"
+      @updated="loadRules()"
+    />
+
+    <ChannelsSettings
+      v-if="activeView === 'settings-channels'"
+    />
+
+    <ContactsSettings
+      v-if="activeView === 'settings-contacts'"
+    />
+  </div>
 </template>

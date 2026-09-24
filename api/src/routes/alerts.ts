@@ -1,47 +1,45 @@
 import { Router, Request, Response } from 'express';
-import pool from '../db';
-import { RULES, CATEGORY_RULES, CONTACTS } from '../config';
-import { classify, OpenBlockingError } from '../severity';
+import { getStore } from '../store';
+import { getRules, getCategoryRules, getContacts } from '../services/settings-store';
+import { classify } from '../severity';
+import {
+  indexById, toOpenBlockingErrors, computeTxLast60, computeBaselineLast60,
+  computeThresholdFlowCounts, computeNsCategoryCounts, computeStalePending, errorsForFlow,
+} from '../store/aggregate';
 
 const router = Router();
 
 router.get('/', async (req: Request, res: Response) => {
   try {
+    const store = getStore();
     const now = new Date();
     const todayStr = now.toISOString().slice(0, 10);
     const startDate = (req.query.startDate as string) || todayStr;
     const endDate = (req.query.endDate as string) || todayStr;
     const endDatePlus1 = new Date(endDate);
     endDatePlus1.setDate(endDatePlus1.getDate() + 1);
-    const endStr = endDatePlus1.toISOString().slice(0, 10);
 
-    // Get current severity state
-    const blockingRes = await pool.query<OpenBlockingError>(`
-      SELECT error_id, transaction_id, flow_code, entity_identifier,
-             error_code, error_message, occurred_at
-      FROM v_open_blocking_errors
-    `);
-    const openBlocking = blockingRes.rows;
+    // Current severity state
+    const openErrors = await store.getOpenErrors();
+    const openTx = await Promise.all(
+      [...new Set(openErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
+    );
+    const openTxById = indexById(openTx.filter((t): t is NonNullable<typeof t> => !!t));
+    const openBlocking = toOpenBlockingErrors(openErrors, openTxById);
 
-    const hbRes = await pool.query(`SELECT heartbeat_at FROM connector_heartbeats ORDER BY heartbeat_at DESC LIMIT 1`);
-    const heartbeatAgeMin = hbRes.rows.length
-      ? (Date.now() - new Date(hbRes.rows[0].heartbeat_at).getTime()) / 60000
-      : 999;
+    const hb = await store.getLatestHeartbeat();
+    const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
 
-    const tx60Res = await pool.query(`
-      SELECT COUNT(*)::int AS cnt FROM integration_transactions
-      WHERE flow_code != 'NS' AND created_at > NOW() - INTERVAL '60 minutes'
-    `);
-    const baseRes = await pool.query(`
-      SELECT COUNT(*)::int AS cnt FROM integration_transactions
-      WHERE flow_code != 'NS' AND created_at > NOW() - INTERVAL '28 days'
-        AND EXTRACT(DOW FROM created_at) = EXTRACT(DOW FROM NOW())
-        AND EXTRACT(HOUR FROM created_at) = EXTRACT(HOUR FROM NOW())
-    `);
+    const last28d = await store.queryTransactions({ start: new Date(now.getTime() - 28 * 86400000), end: new Date(now.getTime() + 1000) });
+    const txLast60 = computeTxLast60(last28d, now);
+    const baselineLast60 = computeBaselineLast60(last28d, now);
 
-    const overallSeverity = classify(openBlocking, heartbeatAgeMin, tx60Res.rows[0].cnt, Math.round(baseRes.rows[0].cnt / 4));
+    const overallSeverity = classify(openBlocking, heartbeatAgeMin, txLast60, baselineLast60);
 
-    // Build alerts
+    const RULES = getRules();
+    const CONTACTS = getContacts();
+    const CATEGORY_RULES = getCategoryRules();
+
     const alerts: any[] = [];
     const resolveContacts = (names: string[]) =>
       names.map(n => CONTACTS[n] ? { key: n, ...CONTACTS[n] } : { key: n, name: n, email: '' });
@@ -64,19 +62,8 @@ router.get('/', async (req: Request, res: Response) => {
     }
 
     // Threshold alerts (from in-range counts)
-    const flowCountsRes = await pool.query(`
-      SELECT flow_code,
-        COUNT(*) FILTER (WHERE normalized_status = 'FAILED')::int AS errors,
-        COUNT(*) FILTER (WHERE is_rerun = TRUE)::int AS reruns
-      FROM integration_transactions
-      WHERE created_at >= $1 AND created_at < $2
-      GROUP BY flow_code
-    `, [startDate, endStr]);
-
-    const flowCounts: Record<string, { errors: number; reruns: number }> = {};
-    for (const r of flowCountsRes.rows) {
-      flowCounts[r.flow_code] = { errors: r.errors, reruns: r.reruns };
-    }
+    const rangeTransactions = await store.queryTransactions({ start: new Date(startDate), end: endDatePlus1 });
+    const flowCounts = computeThresholdFlowCounts(rangeTransactions);
 
     const checks: [string, number, string][] = [
       ['S2N.errors', flowCounts['S2N']?.errors || 0, 'Shopify → NetSuite order errors'],
@@ -86,18 +73,15 @@ router.get('/', async (req: Request, res: Response) => {
     ];
 
     // NS category thresholds
-    const nsCatRes = await pool.query(`
-      SELECT e.error_code, COUNT(*)::int AS cnt
-      FROM integration_errors e
-      JOIN integration_transactions t ON t.id = e.transaction_id
-      WHERE t.flow_code = 'NS' AND e.occurred_at >= $1 AND e.occurred_at < $2
-      GROUP BY e.error_code
-    `, [startDate, endStr]);
-    for (const r of nsCatRes.rows) {
-      const thresholdKey = `NS.${r.error_code}`;
+    const rangeErrors = await store.queryErrors({ start: new Date(startDate), end: endDatePlus1 });
+    const rangeTxById = indexById(rangeTransactions);
+    const nsErrors = errorsForFlow(rangeErrors, rangeTxById, 'NS');
+    const nsCounts = computeNsCategoryCounts(nsErrors);
+    for (const [code, cnt] of Object.entries(nsCounts)) {
+      const thresholdKey = `NS.${code}`;
       if (RULES.thresholds[thresholdKey]) {
-        const rule = CATEGORY_RULES.find(c => c.code === r.error_code);
-        checks.push([thresholdKey, r.cnt, `NetSuite: ${rule?.label || r.error_code}`]);
+        const rule = CATEGORY_RULES.find(c => c.code === code);
+        checks.push([thresholdKey, cnt, `NetSuite: ${rule?.label || code}`]);
       }
     }
 
@@ -117,23 +101,21 @@ router.get('/', async (req: Request, res: Response) => {
       }
     }
 
-    // Pending SLA check
-    const staleRes = await pool.query(`
-      SELECT COUNT(*)::int AS cnt, ARRAY_AGG(entity_identifier) AS ids
-      FROM integration_transactions
-      WHERE normalized_status IN ('PENDING','PROCESSING')
-        AND created_at < NOW() - INTERVAL '${RULES.thresholds['pending.unresolvedHours']} hours'
-    `);
-    if (staleRes.rows[0].cnt > 0) {
+    // Pending SLA check — unbounded, via the maintained pending-transactions index
+    // (not a date-range scan), so a transaction stuck for a long time keeps alerting.
+    const pendingHours = RULES.thresholds['pending.unresolvedHours'];
+    const allPending = await store.getPendingTransactions();
+    const stale = computeStalePending(allPending, pendingHours, now);
+    if (stale.count > 0) {
       alerts.push({
         level: 0,
         title: 'Pending transactions past SLA',
-        detail: `${staleRes.rows[0].cnt} pending longer than ${RULES.thresholds['pending.unresolvedHours']} h`,
+        detail: `${stale.count} pending longer than ${pendingHours} h`,
         notify: resolveContacts(['Larry', 'Quennie']),
         cc: [],
         when: now.toISOString(),
         renotifyMinutes: 240,
-        ids: (staleRes.rows[0].ids || []).slice(0, 10),
+        ids: stale.ids.slice(0, 10),
       });
     }
 

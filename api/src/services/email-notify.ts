@@ -9,26 +9,38 @@
  *   SMTP_FROM       — Sender address (defaults to SMTP_USER)
  */
 
-import nodemailer from 'nodemailer';
-import { CONTACTS } from '../config';
+import nodemailer, { type Transporter } from 'nodemailer';
+import { getContacts, getNotificationChannels } from './settings-store';
 
-const SMTP_HOST = process.env.SMTP_HOST || '';
-const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587', 10);
-const SMTP_USER = process.env.SMTP_USER || '';
-const SMTP_PASS = process.env.SMTP_PASS || '';
-const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
+let transporter: Transporter | null = null;
+let lastSmtpKey = '';
 
-let transporter: nodemailer.Transporter | null = null;
+function getSmtpConfig() {
+  const channels = getNotificationChannels();
+  const smtp = channels.email.smtp;
+  // Fall back to env vars if settings are empty
+  return {
+    host: smtp.host || process.env.SMTP_HOST || '',
+    port: smtp.port || parseInt(process.env.SMTP_PORT || '587', 10),
+    user: smtp.user || process.env.SMTP_USER || '',
+    pass: smtp.password || process.env.SMTP_PASS || '',
+    from: smtp.from || process.env.SMTP_FROM || smtp.user || process.env.SMTP_USER || '',
+  };
+}
 
-function getTransporter(): nodemailer.Transporter | null {
-  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) return null;
-  if (!transporter) {
+function getTransporter(): Transporter | null {
+  const cfg = getSmtpConfig();
+  if (!cfg.host || !cfg.user || !cfg.pass) return null;
+  // Recreate transporter if SMTP config changed
+  const key = `${cfg.host}:${cfg.port}:${cfg.user}`;
+  if (!transporter || key !== lastSmtpKey) {
     transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_PORT === 465,
-      auth: { user: SMTP_USER, pass: SMTP_PASS },
+      host: cfg.host,
+      port: cfg.port,
+      secure: cfg.port === 465,
+      auth: { user: cfg.user, pass: cfg.pass },
     });
+    lastSmtpKey = key;
   }
   return transporter;
 }
@@ -37,13 +49,15 @@ function getTransporter(): nodemailer.Transporter | null {
  * Returns true if email is configured.
  */
 export function isEmailEnabled(): boolean {
-  return !!(SMTP_HOST && SMTP_USER && SMTP_PASS);
+  const cfg = getSmtpConfig();
+  return !!(cfg.host && cfg.user && cfg.pass);
 }
 
 /**
  * Resolve contact names to email addresses using CONTACTS config.
  */
 function resolveEmails(names: string[]): string[] {
+  const CONTACTS = getContacts();
   return names
     .map(name => CONTACTS[name]?.email || '')
     .filter(email => email.length > 0);
@@ -71,7 +85,7 @@ export async function sendAlertEmail(
 
   try {
     await t.sendMail({
-      from: SMTP_FROM,
+      from: getSmtpConfig().from,
       to: toEmails.join(', '),
       cc: ccEmails.length > 0 ? ccEmails.join(', ') : undefined,
       subject,

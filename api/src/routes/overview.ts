@@ -1,7 +1,12 @@
 import { Router, Request, Response } from 'express';
-import pool from '../db';
-import { FLOWS, RULES, CONTACTS } from '../config';
-import { classify, classifyFlow, OpenBlockingError, startOfToday } from '../severity';
+import { getStore } from '../store';
+import { FLOWS } from '../config';
+import { getRules, getContacts } from '../services/settings-store';
+import { classify, classifyFlow } from '../severity';
+import {
+  toOpenBlockingErrors, indexById, groupByFlow, computeFlowCardStats,
+  computeTxLast60, computeBaselineLast60, computeErrorSparkline,
+} from '../store/aggregate';
 
 const router = Router();
 
@@ -16,45 +21,30 @@ function parseDates(req: Request): { startDate: string; endDate: string } {
 
 router.get('/', async (req: Request, res: Response) => {
   try {
+    const store = getStore();
+    const RULES = getRules();
+    const CONTACTS = getContacts();
+    const now = new Date();
     const { startDate, endDate } = parseDates(req);
-    // Add 1 day to endDate for < comparison (inclusive end)
     const endDatePlus1 = new Date(endDate);
     endDatePlus1.setDate(endDatePlus1.getDate() + 1);
-    const endStr = endDatePlus1.toISOString().slice(0, 10);
 
     // 1. Open blocking errors (for severity computation - always "now", not range-filtered)
-    const blockingRes = await pool.query<OpenBlockingError>(`
-      SELECT error_id, transaction_id, flow_code, entity_identifier,
-             error_code, error_message, occurred_at
-      FROM v_open_blocking_errors
-    `);
-    const openBlocking = blockingRes.rows;
+    const openErrors = await store.getOpenErrors();
+    const openErrTransactions = await Promise.all(
+      [...new Set(openErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
+    );
+    const openErrTxById = indexById(openErrTransactions.filter((t): t is NonNullable<typeof t> => !!t));
+    const openBlocking = toOpenBlockingErrors(openErrors, openErrTxById);
 
     // 2. Latest heartbeat
-    const hbRes = await pool.query(`
-      SELECT heartbeat_at FROM connector_heartbeats
-      ORDER BY heartbeat_at DESC LIMIT 1
-    `);
-    const heartbeatAgeMin = hbRes.rows.length
-      ? (Date.now() - new Date(hbRes.rows[0].heartbeat_at).getTime()) / 60000
-      : 999;
+    const hb = await store.getLatestHeartbeat();
+    const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
 
-    // 3. Transactions in last 60 min (for sev4 zero-traffic check)
-    const tx60Res = await pool.query(`
-      SELECT COUNT(*)::int AS cnt FROM integration_transactions
-      WHERE flow_code != 'NS' AND created_at > NOW() - INTERVAL '60 minutes'
-    `);
-    const txLast60 = tx60Res.rows[0].cnt;
-
-    // 4. Baseline (4-week average for this hour on this weekday)
-    const baseRes = await pool.query(`
-      SELECT COUNT(*)::int AS cnt FROM integration_transactions
-      WHERE flow_code != 'NS'
-        AND created_at > NOW() - INTERVAL '28 days'
-        AND EXTRACT(DOW FROM created_at) = EXTRACT(DOW FROM NOW())
-        AND EXTRACT(HOUR FROM created_at) = EXTRACT(HOUR FROM NOW())
-    `);
-    const baselineLast60 = Math.round(baseRes.rows[0].cnt / 4);
+    // 3 & 4. Transactions in last 60 min + 28-day baseline (one query covers both)
+    const last28d = await store.queryTransactions({ start: new Date(now.getTime() - 28 * 86400000), end: new Date(now.getTime() + 1000) });
+    const txLast60 = computeTxLast60(last28d, now);
+    const baselineLast60 = computeBaselineLast60(last28d, now);
 
     // 5. Compute overall severity
     const overallSeverity = classify(openBlocking, heartbeatAgeMin, txLast60, baselineLast60);
@@ -67,53 +57,31 @@ router.get('/', async (req: Request, res: Response) => {
     }
 
     // 7. Flow card stats (in range)
-    const flowStatsRes = await pool.query(`
-      SELECT flow_code,
-        COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE normalized_status = 'SUCCESS')::int AS succeeded,
-        COUNT(*) FILTER (WHERE normalized_status = 'FAILED')::int AS errored,
-        COUNT(*) FILTER (WHERE normalized_status IN ('PENDING','RETRY','PROCESSING'))::int AS pending_rerun,
-        COUNT(*) FILTER (WHERE is_rerun = TRUE)::int AS reruns
-      FROM integration_transactions
-      WHERE created_at >= $1 AND created_at < $2
-      GROUP BY flow_code
-    `, [startDate, endStr]);
+    const rangeTransactions = await store.queryTransactions({ start: new Date(startDate), end: endDatePlus1 });
+    const flowStatsByFlow = groupByFlow(rangeTransactions, computeFlowCardStats);
 
     const flowStats: Record<string, any> = {};
     for (const f of Object.keys(FLOWS)) {
-      const row = flowStatsRes.rows.find(r => r.flow_code === f);
+      const stats = flowStatsByFlow[f];
       flowStats[f] = {
         ...FLOWS[f],
         severity: perFlowSeverity[f],
-        total: row?.total || 0,
-        succeeded: row?.succeeded || 0,
-        errored: row?.errored || 0,
-        pending_rerun: row?.pending_rerun || 0,
-        reruns: row?.reruns || 0,
+        total: stats?.total || 0,
+        succeeded: stats?.succeeded || 0,
+        errored: stats?.errored || 0,
+        pending_rerun: stats?.pending_rerun || 0,
+        reruns: stats?.reruns || 0,
       };
     }
 
     // 8. Sparkline data: errors per day per flow, last 14 days
-    const sparkRes = await pool.query(`
-      SELECT flow_code,
-        DATE(created_at AT TIME ZONE 'UTC') AS d,
-        COUNT(*) FILTER (WHERE normalized_status = 'FAILED')::int AS errors
-      FROM integration_transactions
-      WHERE created_at >= (CURRENT_DATE - INTERVAL '13 days')
-      GROUP BY flow_code, DATE(created_at AT TIME ZONE 'UTC')
-      ORDER BY d
-    `);
+    const last14ByFlow = groupByFlow(
+      last28d.filter(t => new Date(t.created_at).getTime() >= now.getTime() - 13 * 86400000),
+      (rows) => rows,
+    );
     const sparklines: Record<string, number[]> = {};
     for (const f of Object.keys(FLOWS)) {
-      const pts: number[] = [];
-      for (let d = 13; d >= 0; d--) {
-        const day = new Date();
-        day.setDate(day.getDate() - d);
-        const dayStr = day.toISOString().slice(0, 10);
-        const row = sparkRes.rows.find(r => r.flow_code === f && r.d?.toISOString?.()?.slice(0, 10) === dayStr);
-        pts.push(row?.errors || 0);
-      }
-      sparklines[f] = pts;
+      sparklines[f] = computeErrorSparkline(last14ByFlow[f] || [], 14);
     }
 
     // 9. Escalation info (resolve contact names to full name + email)
@@ -132,10 +100,7 @@ router.get('/', async (req: Request, res: Response) => {
       txLast60,
       baselineLast60,
       openBlockingCount: openBlocking.length,
-      openBlocking: openBlocking.map(e => ({
-        ...e,
-        occurred_at: e.occurred_at,
-      })),
+      openBlocking,
       perFlowSeverity,
       flowStats,
       sparklines,

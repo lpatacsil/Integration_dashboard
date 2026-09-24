@@ -205,6 +205,38 @@ export interface RulesResponse {
   rules: Rules
 }
 
+/* ── /api/settings ── */
+export interface Contact {
+  name: string
+  email: string
+}
+
+export interface SmtpConfig {
+  host: string
+  port: number
+  user: string
+  password: string
+  from: string
+}
+
+export interface NotificationChannels {
+  email: {
+    enabled: boolean
+    smtp: SmtpConfig
+  }
+  teams: {
+    enabled: boolean
+    webhookUrl: string
+  }
+}
+
+export interface SettingsData {
+  contacts: Record<string, Contact>
+  categoryRules: CategoryRule[]
+  rules: Rules
+  notificationChannels: NotificationChannels
+}
+
 /* ── Helpers ── */
 export const SEV_NAMES = ['Healthy', 'Sev 1', 'Sev 2', 'Sev 3', 'Sev 4'] as const
 

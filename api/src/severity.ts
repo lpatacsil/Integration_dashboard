@@ -1,13 +1,13 @@
-import { RULES } from './config';
+import { getRules } from './services/settings-store';
 
 export interface OpenBlockingError {
-  error_id: number;
-  transaction_id: number;
+  error_id: string;
+  transaction_id: string;
   flow_code: string;
   entity_identifier: string;
   error_code: string;
   error_message: string;
-  occurred_at: Date;
+  occurred_at: string;
 }
 
 export function startOfToday(): Date {
@@ -22,7 +22,7 @@ export function classify(
   txLast60: number,
   baselineLast60: number,
 ): number {
-  const s = RULES.severity;
+  const s = getRules().severity;
   if (heartbeatAgeMin > s.sev4.heartbeatMaxMinutes || (txLast60 === 0 && baselineLast60 > 0)) return 4;
   const n = openBlocking.length;
   if (n === 0) return 0;

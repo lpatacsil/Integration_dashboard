@@ -1,6 +1,12 @@
-import pool from '../db';
-import { RULES, CATEGORY_RULES, FLOWS } from '../config';
-import { classify, OpenBlockingError, startOfToday } from '../severity';
+import { ulid } from 'ulid';
+import { getStore, AlertIncident } from '../store';
+import { FLOWS } from '../config';
+import { getRules, getCategoryRules } from './settings-store';
+import { classify } from '../severity';
+import {
+  indexById, toOpenBlockingErrors, computeTxLast60, computeBaselineLast60,
+  computeThresholdFlowCounts, computeNsCategoryCounts, errorsForFlow,
+} from '../store/aggregate';
 import { sendTeamsNotification, isTeamsEnabled } from './teams-notify';
 import { sendAlertEmail, isEmailEnabled } from './email-notify';
 
@@ -111,6 +117,9 @@ interface EvaluationResult {
  * and generate notification records. Does NOT send emails.
  */
 export async function evaluate(): Promise<EvaluationResult> {
+  const RULES = getRules();
+  const CATEGORY_RULES = getCategoryRules();
+  const store = getStore();
   const result: EvaluationResult = {
     incidentsOpened: 0,
     incidentsResolved: 0,
@@ -123,40 +132,24 @@ export async function evaluate(): Promise<EvaluationResult> {
 
   // ── 1. Gather current state ────────────────────────────────────────────
 
-  const blockingRes = await pool.query<OpenBlockingError>(`
-    SELECT error_id, transaction_id, flow_code, entity_identifier,
-           error_code, error_message, occurred_at
-    FROM v_open_blocking_errors
-  `);
-  const openBlocking = blockingRes.rows;
-
-  const hbRes = await pool.query(`
-    SELECT heartbeat_at FROM connector_heartbeats
-    ORDER BY heartbeat_at DESC LIMIT 1
-  `);
-  const heartbeatAgeMin = hbRes.rows.length
-    ? (Date.now() - new Date(hbRes.rows[0].heartbeat_at).getTime()) / 60000
-    : 999;
-
-  const tx60Res = await pool.query(`
-    SELECT COUNT(*)::int AS cnt FROM integration_transactions
-    WHERE flow_code != 'NS' AND created_at > NOW() - INTERVAL '60 minutes'
-  `);
-  const baseRes = await pool.query(`
-    SELECT COUNT(*)::int AS cnt FROM integration_transactions
-    WHERE flow_code != 'NS' AND created_at > NOW() - INTERVAL '28 days'
-      AND EXTRACT(DOW FROM created_at) = EXTRACT(DOW FROM NOW())
-      AND EXTRACT(HOUR FROM created_at) = EXTRACT(HOUR FROM NOW())
-  `);
-
-  const overallSeverity = classify(
-    openBlocking, heartbeatAgeMin,
-    tx60Res.rows[0].cnt, Math.round(baseRes.rows[0].cnt / 4),
+  const openErrors = await store.getOpenErrors();
+  const openTx = await Promise.all(
+    [...new Set(openErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
   );
+  const openTxById = indexById(openTx.filter((t): t is NonNullable<typeof t> => !!t));
+  const openBlocking = toOpenBlockingErrors(openErrors, openTxById);
+
+  const hb = await store.getLatestHeartbeat();
+  const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
+
+  const last28d = await store.queryTransactions({ start: new Date(now.getTime() - 28 * 86400000), end: new Date(now.getTime() + 1000) });
+  const txLast60 = computeTxLast60(last28d, now);
+  const baselineLast60 = computeBaselineLast60(last28d, now);
+
+  const overallSeverity = classify(openBlocking, heartbeatAgeMin, txLast60, baselineLast60);
 
   // ── 2. Build current incident set from open blocking errors ─────────
 
-  // Group blocking errors by flow + category + entity
   const currentIncidents = new Map<string, {
     flowCode: string;
     errorCode: string;
@@ -188,25 +181,14 @@ export async function evaluate(): Promise<EvaluationResult> {
     }
   }
 
-  // Also check threshold breaches
-  const todayStr = now.toISOString().slice(0, 10);
-  const tomorrowDate = new Date(now);
-  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-  const tomorrowStr = tomorrowDate.toISOString().slice(0, 10);
+  // Also check threshold breaches (today's range)
+  const todayStart = new Date(now); todayStart.setUTCHours(0, 0, 0, 0);
+  const tomorrowStart = new Date(todayStart.getTime() + 86400000);
+  const todayTransactions = await store.queryTransactions({ start: todayStart, end: tomorrowStart });
+  const todayErrors = await store.queryErrors({ start: todayStart, end: tomorrowStart });
+  const todayTxById = indexById(todayTransactions);
 
-  const flowCountsRes = await pool.query(`
-    SELECT flow_code,
-      COUNT(*) FILTER (WHERE normalized_status = 'FAILED')::int AS errors,
-      COUNT(*) FILTER (WHERE is_rerun = TRUE)::int AS reruns
-    FROM integration_transactions
-    WHERE created_at >= $1 AND created_at < $2
-    GROUP BY flow_code
-  `, [todayStr, tomorrowStr]);
-
-  const flowCounts: Record<string, { errors: number; reruns: number }> = {};
-  for (const r of flowCountsRes.rows) {
-    flowCounts[r.flow_code] = { errors: r.errors, reruns: r.reruns };
-  }
+  const flowCounts = computeThresholdFlowCounts(todayTransactions);
 
   const thresholdChecks: Array<{ key: string; flowCode: string; code: string; count: number; threshold: number; label: string }> = [
     { key: 'S2N::THRESHOLD::errors', flowCode: 'S2N', code: 'S2N.errors', count: flowCounts['S2N']?.errors || 0, threshold: RULES.thresholds['S2N.errors'], label: 'Shopify → NetSuite order errors' },
@@ -216,24 +198,18 @@ export async function evaluate(): Promise<EvaluationResult> {
   ];
 
   // NS category thresholds
-  const nsCatRes = await pool.query(`
-    SELECT e.error_code, COUNT(*)::int AS cnt
-    FROM integration_errors e
-    JOIN integration_transactions t ON t.id = e.transaction_id
-    WHERE t.flow_code = 'NS' AND e.occurred_at >= $1 AND e.occurred_at < $2
-    GROUP BY e.error_code
-  `, [todayStr, tomorrowStr]);
-
-  for (const r of nsCatRes.rows) {
-    const thresholdKey = `NS.${r.error_code}`;
+  const nsErrors = errorsForFlow(todayErrors, todayTxById, 'NS');
+  const nsCounts = computeNsCategoryCounts(nsErrors);
+  for (const [code, cnt] of Object.entries(nsCounts)) {
+    const thresholdKey = `NS.${code}`;
     if (RULES.thresholds[thresholdKey]) {
       thresholdChecks.push({
-        key: `NS::THRESHOLD::${r.error_code}`,
+        key: `NS::THRESHOLD::${code}`,
         flowCode: 'NS',
         code: thresholdKey,
-        count: r.cnt,
+        count: cnt,
         threshold: RULES.thresholds[thresholdKey],
-        label: `NetSuite: ${CATEGORY_RULES.find(c => c.code === r.error_code)?.label || r.error_code}`,
+        label: `NetSuite: ${CATEGORY_RULES.find(c => c.code === code)?.label || code}`,
       });
     }
   }
@@ -263,14 +239,12 @@ export async function evaluate(): Promise<EvaluationResult> {
     });
   }
 
-  // ── 3. Load existing open incidents from DB ────────────────────────
+  // ── 3. Load existing open incidents ─────────────────────────────────
 
-  const existingRes = await pool.query(`
-    SELECT * FROM alert_incidents WHERE status = 'OPEN'
-  `);
-  const existingByKey = new Map<string, any>();
-  for (const row of existingRes.rows) {
-    existingByKey.set(row.incident_key, row);
+  const existingIncidents = await store.getOpenIncidents();
+  const existingByKey = new Map<string, AlertIncident>();
+  for (const incident of existingIncidents) {
+    existingByKey.set(incident.incident_key, incident);
   }
 
   // ── 4. Open new incidents / update existing ones ───────────────────
@@ -302,49 +276,52 @@ export async function evaluate(): Promise<EvaluationResult> {
     const existing = existingByKey.get(key);
 
     if (!existing) {
-      // ── New incident: INSERT + create OPENED notification ──
+      // ── New incident ──
       const title = `${flowName} – ${ctx.categoryLabel}`;
-      const insertRes = await pool.query(`
-        INSERT INTO alert_incidents
-          (incident_key, flow_code, error_code, entity_identifier, severity_level,
-           title, detail, notify, cc, renotify_minutes, transaction_ids,
-           status, opened_at, last_notified_at, last_level_change, notification_count)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'OPEN', NOW(), NOW(), NOW(), 1)
-        RETURNING id
-      `, [
-        key, incident.flowCode, incident.errorCode,
-        incident.entityRefs[0] || null, overallSeverity,
-        title, ctx.rawMessage, esc.notify, esc.cc,
-        esc.renotifyMinutes, incident.entityRefs.slice(0, 20),
-      ]);
+      const nowIso = now.toISOString();
+      const newIncident: AlertIncident = {
+        id: ulid(),
+        incident_key: key,
+        flow_code: incident.flowCode,
+        error_code: incident.errorCode,
+        entity_identifier: incident.entityRefs[0] || null,
+        severity_level: overallSeverity,
+        title,
+        detail: ctx.rawMessage,
+        notify: esc.notify,
+        cc: esc.cc,
+        renotify_minutes: esc.renotifyMinutes,
+        transaction_ids: incident.entityRefs.slice(0, 20),
+        status: 'OPEN',
+        opened_at: nowIso,
+        last_notified_at: nowIso,
+        last_level_change: nowIso,
+        resolved_at: null,
+        notification_count: 1,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+      await store.upsertIncident(newIncident);
 
-      const incidentId = insertRes.rows[0].id;
       const subject = renderSubject(ctx);
       const body = renderBody(ctx);
-
-      await pool.query(`
-        INSERT INTO alert_notifications
-          (incident_id, notification_type, severity_level, recipients, cc, subject, body, sent)
-        VALUES ($1, 'OPENED', $2, $3, $4, $5, $6, FALSE)
-      `, [incidentId, overallSeverity, esc.notify, esc.cc, subject, body]);
-
-      result.incidentsOpened++;
-      result.notifications.push({
-        type: 'OPENED', incidentKey: key, subject, recipients: esc.notify, cc: esc.cc, sent: false,
+      const openedNotification = await store.insertNotification({
+        incident_id: newIncident.id, incident_key: key, flow_code: newIncident.flow_code,
+        error_code: newIncident.error_code, entity_identifier: newIncident.entity_identifier,
+        notification_type: 'OPENED', severity_level: overallSeverity,
+        recipients: esc.notify, cc: esc.cc, subject, body, sent: false, sent_at: null,
       });
 
-      // Send Teams notification
-      if (isTeamsEnabled()) {
-        sendTeamsNotification({
-          type: 'OPENED', incidentKey: key, severity: overallSeverity,
-          subject, body, recipients: esc.notify, cc: esc.cc,
-        }).catch(err => console.error('Teams notify error (OPENED):', err));
-      }
+      result.incidentsOpened++;
+      result.notifications.push({ type: 'OPENED', incidentKey: key, subject, recipients: esc.notify, cc: esc.cc, sent: false });
 
-      // Send email notification
+      if (isTeamsEnabled()) {
+        sendTeamsNotification({ type: 'OPENED', incidentKey: key, severity: overallSeverity, subject, body, recipients: esc.notify, cc: esc.cc })
+          .catch(err => console.error('Teams notify error (OPENED):', err));
+      }
       if (isEmailEnabled()) {
         sendAlertEmail(esc.notify, esc.cc, subject, body)
-          .then(sent => { if (sent) markNotificationsSent([incidentId]); })
+          .then(sent => { if (sent) markNotificationsSent([openedNotification.id]); })
           .catch(err => console.error('Email notify error (OPENED):', err));
       }
 
@@ -353,83 +330,74 @@ export async function evaluate(): Promise<EvaluationResult> {
       existingByKey.delete(key); // mark as still active
 
       const levelChanged = existing.severity_level !== overallSeverity;
-      const lastNotified = new Date(existing.last_notified_at);
+      const lastNotified = new Date(existing.last_notified_at || existing.opened_at);
       const minutesSinceNotify = (now.getTime() - lastNotified.getTime()) / 60000;
       const dueForRenotify = minutesSinceNotify >= existing.renotify_minutes;
 
       if (levelChanged) {
-        // Level change notification
-        await pool.query(`
-          UPDATE alert_incidents
-          SET severity_level = $1, last_level_change = NOW(), last_notified_at = NOW(),
-              notify = $2, cc = $3, renotify_minutes = $4,
-              notification_count = notification_count + 1, updated_at = NOW()
-          WHERE id = $5
-        `, [overallSeverity, esc.notify, esc.cc, esc.renotifyMinutes, existing.id]);
+        const updated: AlertIncident = {
+          ...existing,
+          severity_level: overallSeverity,
+          last_level_change: now.toISOString(),
+          last_notified_at: now.toISOString(),
+          notify: esc.notify,
+          cc: esc.cc,
+          renotify_minutes: esc.renotifyMinutes,
+          notification_count: existing.notification_count + 1,
+          updated_at: now.toISOString(),
+        };
+        await store.upsertIncident(updated);
 
         const subject = renderSubject(ctx);
         const body = renderBody(ctx);
-
-        await pool.query(`
-          INSERT INTO alert_notifications
-            (incident_id, notification_type, severity_level, recipients, cc, subject, body, sent)
-          VALUES ($1, 'LEVEL_CHANGE', $2, $3, $4, $5, $6, FALSE)
-        `, [existing.id, overallSeverity, esc.notify, esc.cc, subject, body]);
-
-        result.levelChanges++;
-        result.notifications.push({
-          type: 'LEVEL_CHANGE', incidentKey: key, subject, recipients: esc.notify, cc: esc.cc, sent: false,
+        const levelChangeNotification = await store.insertNotification({
+          incident_id: existing.id, incident_key: key, flow_code: existing.flow_code,
+          error_code: existing.error_code, entity_identifier: existing.entity_identifier,
+          notification_type: 'LEVEL_CHANGE', severity_level: overallSeverity,
+          recipients: esc.notify, cc: esc.cc, subject, body, sent: false, sent_at: null,
         });
 
-        // Send Teams notification
-        if (isTeamsEnabled()) {
-          sendTeamsNotification({
-            type: 'LEVEL_CHANGE', incidentKey: key, severity: overallSeverity,
-            subject, body, recipients: esc.notify, cc: esc.cc,
-          }).catch(err => console.error('Teams notify error (LEVEL_CHANGE):', err));
-        }
+        result.levelChanges++;
+        result.notifications.push({ type: 'LEVEL_CHANGE', incidentKey: key, subject, recipients: esc.notify, cc: esc.cc, sent: false });
 
-        // Send email notification
+        if (isTeamsEnabled()) {
+          sendTeamsNotification({ type: 'LEVEL_CHANGE', incidentKey: key, severity: overallSeverity, subject, body, recipients: esc.notify, cc: esc.cc })
+            .catch(err => console.error('Teams notify error (LEVEL_CHANGE):', err));
+        }
         if (isEmailEnabled()) {
           sendAlertEmail(esc.notify, esc.cc, subject, body)
-            .then(sent => { if (sent) markNotificationsSent([existing.id]); })
+            .then(sent => { if (sent) markNotificationsSent([levelChangeNotification.id]); })
             .catch(err => console.error('Email notify error (LEVEL_CHANGE):', err));
         }
 
       } else if (dueForRenotify) {
-        // Renotify
-        await pool.query(`
-          UPDATE alert_incidents
-          SET last_notified_at = NOW(), notification_count = notification_count + 1, updated_at = NOW()
-          WHERE id = $1
-        `, [existing.id]);
+        const updated: AlertIncident = {
+          ...existing,
+          last_notified_at: now.toISOString(),
+          notification_count: existing.notification_count + 1,
+          updated_at: now.toISOString(),
+        };
+        await store.upsertIncident(updated);
 
         const subject = `[REMINDER] ${renderSubject(ctx)}`;
         const body = renderBody(ctx);
-
-        await pool.query(`
-          INSERT INTO alert_notifications
-            (incident_id, notification_type, severity_level, recipients, cc, subject, body, sent)
-          VALUES ($1, 'RENOTIFY', $2, $3, $4, $5, $6, FALSE)
-        `, [existing.id, overallSeverity, esc.notify, esc.cc, subject, body]);
-
-        result.incidentsRenotified++;
-        result.notifications.push({
-          type: 'RENOTIFY', incidentKey: key, subject, recipients: esc.notify, cc: esc.cc, sent: false,
+        const renotifyNotification = await store.insertNotification({
+          incident_id: existing.id, incident_key: key, flow_code: existing.flow_code,
+          error_code: existing.error_code, entity_identifier: existing.entity_identifier,
+          notification_type: 'RENOTIFY', severity_level: overallSeverity,
+          recipients: esc.notify, cc: esc.cc, subject, body, sent: false, sent_at: null,
         });
 
-        // Send Teams notification
-        if (isTeamsEnabled()) {
-          sendTeamsNotification({
-            type: 'RENOTIFY', incidentKey: key, severity: overallSeverity,
-            subject, body, recipients: esc.notify, cc: esc.cc,
-          }).catch(err => console.error('Teams notify error (RENOTIFY):', err));
-        }
+        result.incidentsRenotified++;
+        result.notifications.push({ type: 'RENOTIFY', incidentKey: key, subject, recipients: esc.notify, cc: esc.cc, sent: false });
 
-        // Send email notification
+        if (isTeamsEnabled()) {
+          sendTeamsNotification({ type: 'RENOTIFY', incidentKey: key, severity: overallSeverity, subject, body, recipients: esc.notify, cc: esc.cc })
+            .catch(err => console.error('Teams notify error (RENOTIFY):', err));
+        }
         if (isEmailEnabled()) {
           sendAlertEmail(esc.notify, esc.cc, subject, body)
-            .then(sent => { if (sent) markNotificationsSent([existing.id]); })
+            .then(sent => { if (sent) markNotificationsSent([renotifyNotification.id]); })
             .catch(err => console.error('Email notify error (RENOTIFY):', err));
         }
       }
@@ -439,132 +407,75 @@ export async function evaluate(): Promise<EvaluationResult> {
   // ── 5. Resolve incidents that are no longer active ─────────────────
 
   for (const [key, existing] of existingByKey) {
-    // This incident is no longer in the current set — resolve it
-    await pool.query(`
-      UPDATE alert_incidents
-      SET status = 'RESOLVED', resolved_at = NOW(), updated_at = NOW()
-      WHERE id = $1
-    `, [existing.id]);
+    await store.resolveIncident(existing.id);
 
-    const subject = renderResolvedSubject(
-      FLOWS[existing.flow_code]?.name || existing.flow_code,
-      existing.error_code || 'UNKNOWN',
-    );
+    const subject = renderResolvedSubject(FLOWS[existing.flow_code]?.name || existing.flow_code, existing.error_code || 'UNKNOWN');
     const body = renderResolvedBody(key, now.toISOString());
-
-    await pool.query(`
-      INSERT INTO alert_notifications
-        (incident_id, notification_type, severity_level, recipients, cc, subject, body, sent)
-      VALUES ($1, 'RESOLVED', $2, $3, $4, $5, $6, FALSE)
-    `, [existing.id, 0, existing.notify, existing.cc, subject, body]);
-
-    result.incidentsResolved++;
-    result.notifications.push({
-      type: 'RESOLVED', incidentKey: key, subject, recipients: existing.notify, cc: existing.cc, sent: false,
+    const resolvedNotification = await store.insertNotification({
+      incident_id: existing.id, incident_key: key, flow_code: existing.flow_code,
+      error_code: existing.error_code, entity_identifier: existing.entity_identifier,
+      notification_type: 'RESOLVED', severity_level: 0,
+      recipients: existing.notify, cc: existing.cc, subject, body, sent: false, sent_at: null,
     });
 
-    // Send Teams notification
-    if (isTeamsEnabled()) {
-      sendTeamsNotification({
-        type: 'RESOLVED', incidentKey: key, severity: 0,
-        subject, body, recipients: existing.notify, cc: existing.cc,
-      }).catch(err => console.error('Teams notify error (RESOLVED):', err));
-    }
+    result.incidentsResolved++;
+    result.notifications.push({ type: 'RESOLVED', incidentKey: key, subject, recipients: existing.notify, cc: existing.cc, sent: false });
 
-    // Send email notification
+    if (isTeamsEnabled()) {
+      sendTeamsNotification({ type: 'RESOLVED', incidentKey: key, severity: 0, subject, body, recipients: existing.notify, cc: existing.cc })
+        .catch(err => console.error('Teams notify error (RESOLVED):', err));
+    }
     if (isEmailEnabled()) {
       sendAlertEmail(existing.notify, existing.cc, subject, body)
-        .then(sent => { if (sent) markNotificationsSent([existing.id]); })
+        .then(sent => { if (sent) markNotificationsSent([resolvedNotification.id]); })
         .catch(err => console.error('Email notify error (RESOLVED):', err));
     }
   }
 
   // ── 6. Save severity snapshot ──────────────────────────────────────
 
-  await pool.query(`
-    INSERT INTO severity_snapshots
-      (overall_severity, flow_severities, open_blocking_count,
-       heartbeat_age_min, tx_last_60, baseline_last_60, details)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
-  `, [
-    `SEV_${overallSeverity}`,
-    JSON.stringify({}),
-    openBlocking.length,
-    Math.round(heartbeatAgeMin),
-    tx60Res.rows[0].cnt,
-    Math.round(baseRes.rows[0].cnt / 4),
-    JSON.stringify({ evaluatedAt: now.toISOString(), incidentCount: currentIncidents.size }),
-  ]);
+  await store.insertSeveritySnapshot({
+    evaluated_at: now.toISOString(),
+    overall_severity: `SEV_${overallSeverity}`,
+    flow_severities: {},
+    open_blocking_count: openBlocking.length,
+    heartbeat_age_min: Math.round(heartbeatAgeMin),
+    tx_last_60: txLast60,
+    baseline_last_60: baselineLast60,
+    details: { evaluatedAt: now.toISOString(), incidentCount: currentIncidents.size },
+  });
 
   return result;
 }
 
 // ─── Query helpers for the API ──────────────────────────────────────────────
 
-/**
- * Get all open incidents with their notification history.
- */
-export async function getOpenIncidents(): Promise<any[]> {
-  const res = await pool.query(`
-    SELECT ai.*,
-      (SELECT COUNT(*) FROM alert_notifications WHERE incident_id = ai.id) AS total_notifications,
-      (SELECT COUNT(*) FROM alert_notifications WHERE incident_id = ai.id AND sent = TRUE) AS sent_notifications
-    FROM alert_incidents ai
-    WHERE ai.status = 'OPEN'
-    ORDER BY ai.severity_level DESC, ai.opened_at ASC
-  `);
-  return res.rows;
+export async function getOpenIncidents(): Promise<AlertIncident[]> {
+  const store = getStore();
+  const incidents = await store.getOpenIncidents();
+  const notifications = await store.getRecentNotifications(1000);
+  return incidents
+    .map(i => ({
+      ...i,
+      total_notifications: notifications.filter(n => n.incident_id === i.id).length,
+      sent_notifications: notifications.filter(n => n.incident_id === i.id && n.sent).length,
+    }))
+    .sort((a, b) => b.severity_level - a.severity_level || new Date(a.opened_at).getTime() - new Date(b.opened_at).getTime());
 }
 
-/**
- * Get recent notifications (sent and unsent).
- */
-export async function getRecentNotifications(limit: number = 50): Promise<any[]> {
-  const res = await pool.query(`
-    SELECT an.*, ai.incident_key, ai.flow_code, ai.error_code, ai.entity_identifier
-    FROM alert_notifications an
-    JOIN alert_incidents ai ON ai.id = an.incident_id
-    ORDER BY an.created_at DESC
-    LIMIT $1
-  `, [limit]);
-  return res.rows;
+export async function getRecentNotifications(limit: number = 50) {
+  return getStore().getRecentNotifications(limit);
 }
 
-/**
- * Get incident history (all incidents, including resolved).
- */
-export async function getIncidentHistory(limit: number = 100): Promise<any[]> {
-  const res = await pool.query(`
-    SELECT *
-    FROM alert_incidents
-    ORDER BY opened_at DESC
-    LIMIT $1
-  `, [limit]);
-  return res.rows;
+export async function getIncidentHistory(limit: number = 100) {
+  return getStore().getIncidentHistory(limit);
 }
 
-/**
- * Get unsent notifications (for when email transport is enabled).
- */
-export async function getUnsentNotifications(): Promise<any[]> {
-  const res = await pool.query(`
-    SELECT an.*, ai.incident_key, ai.flow_code, ai.error_code
-    FROM alert_notifications an
-    JOIN alert_incidents ai ON ai.id = an.incident_id
-    WHERE an.sent = FALSE
-    ORDER BY an.created_at ASC
-  `);
-  return res.rows;
+export async function getUnsentNotifications() {
+  return getStore().getUnsentNotifications();
 }
 
-/**
- * Mark notifications as sent (called after email transport sends them).
- */
-export async function markNotificationsSent(ids: number[]): Promise<void> {
+export async function markNotificationsSent(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  await pool.query(`
-    UPDATE alert_notifications
-    SET sent = TRUE, sent_at = NOW()
-    WHERE id = ANY($1)
-  `, [ids]);
+  await getStore().markNotificationsSent(ids);
 }

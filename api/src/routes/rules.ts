@@ -1,12 +1,12 @@
 import { Router } from 'express';
-import { CATEGORY_RULES, RULES } from '../config';
+import { getCategoryRules, getRules } from '../services/settings-store';
 
 const router = Router();
 
 router.get('/', (_req, res) => {
   res.json({
-    categories: CATEGORY_RULES,
-    rules: RULES,
+    categories: getCategoryRules(),
+    rules: getRules(),
   });
 });
 

@@ -15,9 +15,11 @@ import alertsRouter from './routes/alerts';
 import rulesRouter from './routes/rules';
 import netsuiteRouter from './routes/netsuite';
 import alertEngineRouter from './routes/alert-engine';
+import settingsRouter from './routes/settings';
+import { loadSettings } from './services/settings-store';
 
 const app = express();
-const PORT = parseInt(process.env.API_PORT || '3001', 10);
+const PORT = parseInt(process.env.PORT || process.env.API_PORT || '3001', 10);
 
 app.use(cors());
 app.use(express.json());
@@ -33,6 +35,7 @@ app.use('/api/alerts', alertsRouter);
 app.use('/api/rules', rulesRouter);
 app.use('/api/netsuite', netsuiteRouter);
 app.use('/api/alert-engine', alertEngineRouter);
+app.use('/api/settings', settingsRouter);
 
 // Serve built frontend if public/ directory exists
 const publicDir = path.join(__dirname, '..', 'public');
@@ -43,6 +46,14 @@ if (fs.existsSync(publicDir)) {
   });
 }
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`API listening on http://0.0.0.0:${PORT}`);
+loadSettings().then(() => {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`API listening on http://0.0.0.0:${PORT}`);
+  });
+}).catch(err => {
+  console.error('Failed to load settings:', err);
+  // Start anyway with defaults
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`API listening on http://0.0.0.0:${PORT} (settings load failed, using defaults)`);
+  });
 });

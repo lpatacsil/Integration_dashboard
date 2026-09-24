@@ -9,3 +9,23 @@ export async function fetchJSON<T>(path: string, params: Record<string, string |
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
   return res.json()
 }
+
+export async function putJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(BASE + path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
+export async function patchJSON<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(BASE + path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}

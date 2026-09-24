@@ -5,7 +5,12 @@
  * Set the TEAMS_WEBHOOK_URL environment variable to enable.
  */
 
-const WEBHOOK_URL = process.env.TEAMS_WEBHOOK_URL || '';
+import { getNotificationChannels } from './settings-store';
+
+function getWebhookUrl(): string {
+  const channels = getNotificationChannels();
+  return channels.teams.webhookUrl || process.env.TEAMS_WEBHOOK_URL || '';
+}
 
 const SEVERITY_COLORS: Record<number, string> = {
   0: 'Good',      // green
@@ -37,19 +42,20 @@ interface TeamsNotification {
  * Returns true if the Teams webhook is configured.
  */
 export function isTeamsEnabled(): boolean {
-  return WEBHOOK_URL.length > 0;
+  return getWebhookUrl().length > 0;
 }
 
 /**
  * Send an alert notification to the Teams channel as an Adaptive Card.
  */
 export async function sendTeamsNotification(notification: TeamsNotification): Promise<boolean> {
-  if (!isTeamsEnabled()) return false;
+  const webhookUrl = getWebhookUrl();
+  if (!webhookUrl) return false;
 
   const card = buildAdaptiveCard(notification);
 
   try {
-    const res = await fetch(WEBHOOK_URL, {
+    const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(card),
