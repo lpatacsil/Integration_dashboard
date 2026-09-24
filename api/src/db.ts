@@ -8,6 +8,7 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || 'localdev_only_2026',
   max: 10,
   idleTimeoutMillis: 30000,
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
 });
 
 export default pool;

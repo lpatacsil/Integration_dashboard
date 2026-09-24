@@ -1,4 +1,4 @@
-import pool from '../db';
+import { getStore } from '../store';
 import { suiteQL, getRecord } from './netsuite-client';
 import { isConfigured } from './netsuite-auth';
 
@@ -41,17 +41,9 @@ export async function syncRecentOrders(): Promise<{
   const errors: string[] = [];
 
   try {
-    // Find local records that need enrichment
-    const localResult = await pool.query(`
-      SELECT id, sales_order_id
-      FROM integration_transactions
-      WHERE sales_order_id LIKE 'SO%'
-        AND netsuite_record_id IS NULL
-      ORDER BY created_at DESC
-      LIMIT 500
-    `);
+    const store = getStore();
+    const records = await store.findTransactionsNeedingNetsuiteSync(500);
 
-    const records = localResult.rows;
     if (records.length === 0) {
       state.running = false;
       state.lastSyncAt = new Date().toISOString();
@@ -63,7 +55,7 @@ export async function syncRecentOrders(): Promise<{
     const batchSize = 50;
     for (let i = 0; i < records.length; i += batchSize) {
       const batch = records.slice(i, i + batchSize);
-      const soIds = batch.map((r: any) => r.sales_order_id);
+      const soIds = batch.map((r) => r.sales_order_id as string);
 
       try {
         // Build SuiteQL IN clause
@@ -95,7 +87,7 @@ export async function syncRecentOrders(): Promise<{
 
         // Update local records with enrichment data
         for (const record of batch) {
-          const nsData = nsMap.get(record.sales_order_id);
+          const nsData = nsMap.get(record.sales_order_id as string);
           if (!nsData) {
             skipped++;
             continue;
@@ -111,19 +103,11 @@ export async function syncRecentOrders(): Promise<{
               netsuite_synced_at: new Date().toISOString(),
             };
 
-            await pool.query(
-              `UPDATE integration_transactions
-               SET netsuite_record_type = 'salesorder',
-                   netsuite_record_id = $1,
-                   raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $2::jsonb,
-                   updated_at = NOW()
-               WHERE id = $3`,
-              [
-                String(nsData.internalid),
-                JSON.stringify(enrichment),
-                record.id,
-              ],
-            );
+            await store.updateTransaction(record.id, {
+              netsuite_record_type: 'salesorder',
+              netsuite_record_id: String(nsData.internalid),
+              raw_payload: { ...(record.raw_payload || {}), ...enrichment },
+            });
             synced++;
           } catch (err: any) {
             errors.push(`Failed to update record ${record.id}: ${err.message}`);
@@ -155,34 +139,11 @@ export async function fetchOrderDetail(salesOrderId: string): Promise<{
   errors: Record<string, any>[];
   reruns: Record<string, any>[];
 }> {
-  // Get local record
-  const localResult = await pool.query(
-    `SELECT * FROM integration_transactions WHERE sales_order_id = $1 LIMIT 1`,
-    [salesOrderId],
-  );
-  const local = localResult.rows[0] || null;
+  const store = getStore();
+  const local = await store.getTransactionBySalesOrderId(salesOrderId);
 
-  // Get related errors
-  const errorsResult = local
-    ? await pool.query(
-        `SELECT e.*, ec.label AS category_label, ec.error_group
-         FROM integration_errors e
-         LEFT JOIN error_categories ec ON ec.id = e.error_category_id
-         WHERE e.transaction_id = $1
-         ORDER BY e.occurred_at DESC`,
-        [local.id],
-      )
-    : { rows: [] };
-
-  // Get related reruns
-  const rerunsResult = local
-    ? await pool.query(
-        `SELECT * FROM integration_reruns
-         WHERE transaction_id = $1
-         ORDER BY started_at DESC`,
-        [local.id],
-      )
-    : { rows: [] };
+  const errorsResult = local ? await store.getErrorsForTransaction(local.id) : [];
+  const rerunsResult = local ? await store.getRerunsForTransaction(local.id) : [];
 
   // Attempt live NetSuite lookup if we have the internal ID
   let netsuite: Record<string, any> | null = null;
@@ -197,8 +158,8 @@ export async function fetchOrderDetail(salesOrderId: string): Promise<{
   return {
     local,
     netsuite,
-    errors: errorsResult.rows,
-    reruns: rerunsResult.rows,
+    errors: errorsResult,
+    reruns: rerunsResult,
   };
 }
 
@@ -322,19 +283,7 @@ export async function getSyncStatus(): Promise<{
   enrichedCount: number;
 }> {
   const configured = isConfigured();
-
-  // Count records that could be synced vs already enriched
-  const pendingResult = await pool.query(`
-    SELECT COUNT(*)::int AS count
-    FROM integration_transactions
-    WHERE sales_order_id LIKE 'SO%' AND netsuite_record_id IS NULL
-  `);
-
-  const enrichedResult = await pool.query(`
-    SELECT COUNT(*)::int AS count
-    FROM integration_transactions
-    WHERE sales_order_id LIKE 'SO%' AND netsuite_record_id IS NOT NULL
-  `);
+  const { pending, enriched } = await getStore().countNetsuiteSyncStatus();
 
   return {
     configured,
@@ -342,7 +291,7 @@ export async function getSyncStatus(): Promise<{
     lastSyncAt: state.lastSyncAt,
     lastSyncRecords: state.lastSyncRecords,
     lastSyncErrors: state.lastSyncErrors,
-    pendingCount: pendingResult.rows[0]?.count || 0,
-    enrichedCount: enrichedResult.rows[0]?.count || 0,
+    pendingCount: pending,
+    enrichedCount: enriched,
   };
 }

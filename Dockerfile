@@ -22,5 +22,6 @@ COPY api/package.json api/package-lock.json* ./
 RUN npm install --omit=dev
 COPY --from=build-api /app/dist ./dist
 COPY --from=build-frontend /frontend/dist ./public
+ENV PORT=3001
 EXPOSE 3001
 CMD ["node", "dist/index.js"]

@@ -1,0 +1,95 @@
+name: Build and Deploy to Azure Web App
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
+
+env:
+  ACR_NAME: intdashboardacr
+  IMAGE_NAME: integration-dashboard
+  RESOURCE_GROUP: rg-app-webdb-fleetmaintenance
+  APP_NAME: integration-dashboard-erdxhhczasejb4hj
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout code from repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Log in to Azure
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # 3. Log in to Azure Container Registry
+      - name: ACR Login
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      # 4. Build and push Docker image
+      - name: Build and push image
+        run: |
+          IMAGE_TAG="${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          IMAGE_LATEST="${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest"
+          docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
+          docker push $IMAGE_TAG
+          docker push $IMAGE_LATEST
+
+      # 5. Set Web App container image
+      - name: Deploy to Azure Web App
+        run: |
+          az webapp config container set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }} \
+            --container-image-name ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            --container-registry-url https://${{ env.ACR_NAME }}.azurecr.io \
+            --container-registry-user $(az acr credential show --name ${{ env.ACR_NAME }} --query username -o tsv) \
+            --container-registry-password $(az acr credential show --name ${{ env.ACR_NAME }} --query "passwords[0].value" -o tsv)
+
+      # 6. Ensure the Web App's managed identity can read/write the storage account
+      - name: Grant storage access to managed identity
+        run: |
+          PRINCIPAL_ID=$(az webapp identity assign \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }} \
+            --query principalId -o tsv)
+          STORAGE_ID=$(az storage account show \
+            --name ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }} \
+            --query id -o tsv)
+          az role assignment create \
+            --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal \
+            --role "Storage Blob Data Contributor" --scope "$STORAGE_ID" \
+            2>/dev/null || echo "Role assignment already exists or requires manual grant — continuing."
+
+      # 7. Set environment variables on the Web App
+      - name: Configure app settings
+        run: |
+          az webapp config appsettings set \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }} \
+            --settings \
+              WEBSITES_PORT=3001 \
+              PORT=3001 \
+              AZURE_STORAGE_ACCOUNT_NAME="${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}" \
+              AZURE_STORAGE_CONTAINER="${{ secrets.AZURE_STORAGE_CONTAINER }}" \
+              NODE_ENV=production
+
+      # 8. Restart the Web App
+      - name: Restart Web App
+        run: |
+          az webapp restart \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --name ${{ env.APP_NAME }}
+
+      # 9. Verify deployment
+      - name: Health check
+        run: |
+          echo "Waiting for app to start..."
+          sleep 30
+          curl -sf https://${{ env.APP_NAME }}.azurewebsites.net/api/health || echo "App is still starting up..."
+          echo ""
+          echo "Deployment complete: https://${{ env.APP_NAME }}.azurewebsites.net"

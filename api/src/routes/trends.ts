@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
-import pool from '../db';
+import { getStore } from '../store';
+import { computeHourBuckets, computeDayBuckets } from '../store/aggregate';
 
 const router = Router();
 
@@ -13,43 +14,16 @@ router.get('/', async (req: Request, res: Response) => {
 
     const endDatePlus1 = new Date(endDate);
     endDatePlus1.setDate(endDatePlus1.getDate() + 1);
-    const endStr = endDatePlus1.toISOString().slice(0, 10);
 
-    let query: string;
-    if (granularity === 'hour') {
-      query = `
-        SELECT
-          EXTRACT(HOUR FROM created_at)::int AS bucket,
-          COUNT(*) FILTER (WHERE normalized_status = 'SUCCESS')::int AS ok,
-          COUNT(*) FILTER (WHERE normalized_status = 'FAILED')::int AS er,
-          COUNT(*) FILTER (WHERE normalized_status IN ('PENDING','RETRY','PROCESSING'))::int AS pe
-        FROM integration_transactions
-        WHERE created_at >= $1 AND created_at < $2
-          AND flow_code != 'NS'
-        GROUP BY bucket
-        ORDER BY bucket
-      `;
-    } else {
-      query = `
-        SELECT
-          DATE(created_at AT TIME ZONE 'UTC') AS bucket,
-          COUNT(*) FILTER (WHERE normalized_status = 'SUCCESS')::int AS ok,
-          COUNT(*) FILTER (WHERE normalized_status = 'FAILED')::int AS er,
-          COUNT(*) FILTER (WHERE normalized_status IN ('PENDING','RETRY','PROCESSING'))::int AS pe
-        FROM integration_transactions
-        WHERE created_at >= $1 AND created_at < $2
-          AND flow_code != 'NS'
-        GROUP BY bucket
-        ORDER BY bucket
-      `;
-    }
+    const transactions = (await getStore().queryTransactions({ start: new Date(startDate), end: endDatePlus1 }))
+      .filter(t => t.flow_code !== 'NS');
 
-    const result = await pool.query(query, [startDate, endStr]);
+    const rows = granularity === 'hour' ? computeHourBuckets(transactions) : computeDayBuckets(transactions);
 
-    const buckets = result.rows.map(r => ({
+    const buckets = rows.map(r => ({
       label: granularity === 'hour'
-        ? `${r.bucket % 12 || 12}${r.bucket < 12 ? 'a' : 'p'}`
-        : new Date(r.bucket).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        ? `${(r.bucket as number) % 12 || 12}${(r.bucket as number) < 12 ? 'a' : 'p'}`
+        : new Date(r.bucket as string).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
       ok: r.ok,
       er: r.er,
       pe: r.pe,

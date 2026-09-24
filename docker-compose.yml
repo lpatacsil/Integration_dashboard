@@ -1,4 +1,7 @@
 services:
+  # Legacy/dormant: kept so the Postgres path (database/migrations, api/src/db.ts)
+  # can be re-enabled later without losing local dev setup. Not used by the API
+  # by default anymore — see the `azurite` service below.
   postgres:
     image: postgres:16-alpine
     container_name: integration_monitor_db
@@ -17,6 +20,18 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    profiles: ["postgres"]
+
+  # Azure Storage emulator for local dev — the API's default storage backend.
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    container_name: integration_monitor_azurite
+    restart: unless-stopped
+    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck
+    ports:
+      - "12010:10000"
+    volumes:
+      - azuritedata:/data
 
   api:
     build:
@@ -27,11 +42,8 @@ services:
     ports:
       - "3001:3001"
     environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: ${POSTGRES_DB}
-      DB_USER: ${POSTGRES_USER}
-      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;}
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:-teamcentral-logs}
       API_PORT: "3001"
       NETSUITE_ACCOUNT_ID: ${NETSUITE_ACCOUNT_ID:-}
       NETSUITE_CONSUMER_KEY: ${NETSUITE_CONSUMER_KEY:-}
@@ -45,8 +57,8 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
     depends_on:
-      postgres:
-        condition: service_healthy
+      - azurite
 
 volumes:
   pgdata:
+  azuritedata:

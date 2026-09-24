@@ -8,11 +8,14 @@
     "dev": "tsc -w & node --watch dist/index.js"
   },
   "dependencies": {
+    "@azure/identity": "^4.13.3",
+    "@azure/storage-blob": "^12.33.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "nodemailer": "^10.0.10",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "ulid": "^3.0.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
