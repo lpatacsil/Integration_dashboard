@@ -6,10 +6,7 @@ on:
   workflow_dispatch:  # Allows manual trigger from GitHub UI
 
 env:
-  ACR_NAME: intdashboardacr
-  IMAGE_NAME: integration-dashboard
-  RESOURCE_GROUP: rg-app-webdb-fleetmaintenance
-  APP_NAME: integration-dashboard-erdxhhczasejb4hj
+  APP_NAME: integration-dashboard
 
 jobs:
   build-and-deploy:
@@ -20,76 +17,55 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2. Log in to Azure
-      - name: Azure Login
-        uses: azure/login@v2
+      # 2. Set up Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            frontend/package-lock.json
+            api/package-lock.json
 
-      # 3. Log in to Azure Container Registry
-      - name: ACR Login
-        run: az acr login --name ${{ env.ACR_NAME }}
-
-      # 4. Build and push Docker image
-      - name: Build and push image
+      # 3. Build frontend
+      - name: Build frontend
+        working-directory: frontend
         run: |
-          IMAGE_TAG="${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          IMAGE_LATEST="${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest"
-          docker build -t $IMAGE_TAG -t $IMAGE_LATEST .
-          docker push $IMAGE_TAG
-          docker push $IMAGE_LATEST
+          npm ci
+          npm run build
 
-      # 5. Set Web App container image
+      # 4. Build API
+      - name: Build API
+        working-directory: api
+        run: |
+          npm ci
+          npx tsc
+
+      # 5. Copy frontend build into API public folder
+      - name: Copy frontend to API public
+        run: |
+          rm -rf api/public/assets api/public/index.html
+          cp -r frontend/dist/* api/public/
+
+      # 6. Create deployment zip
+      - name: Create deployment package
+        working-directory: api
+        run: |
+          zip -r deploy.zip dist/ public/ package.json package-lock.json node_modules/
+
+      # 7. Deploy zip to Azure Web App using publish profile
       - name: Deploy to Azure Web App
-        run: |
-          az webapp config container set \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.APP_NAME }} \
-            --container-image-name ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-            --container-registry-url https://${{ env.ACR_NAME }}.azurecr.io \
-            --container-registry-user $(az acr credential show --name ${{ env.ACR_NAME }} --query username -o tsv) \
-            --container-registry-password $(az acr credential show --name ${{ env.ACR_NAME }} --query "passwords[0].value" -o tsv)
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.APP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: api/deploy.zip
 
-      # 6. Ensure the Web App's managed identity can read/write the storage account
-      - name: Grant storage access to managed identity
-        run: |
-          PRINCIPAL_ID=$(az webapp identity assign \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.APP_NAME }} \
-            --query principalId -o tsv)
-          STORAGE_ID=$(az storage account show \
-            --name ${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }} \
-            --query id -o tsv)
-          az role assignment create \
-            --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal \
-            --role "Storage Blob Data Contributor" --scope "$STORAGE_ID" \
-            2>/dev/null || echo "Role assignment already exists or requires manual grant — continuing."
-
-      # 7. Set environment variables on the Web App
-      - name: Configure app settings
-        run: |
-          az webapp config appsettings set \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.APP_NAME }} \
-            --settings \
-              WEBSITES_PORT=3001 \
-              PORT=3001 \
-              AZURE_STORAGE_ACCOUNT_NAME="${{ secrets.AZURE_STORAGE_ACCOUNT_NAME }}" \
-              AZURE_STORAGE_CONTAINER="${{ secrets.AZURE_STORAGE_CONTAINER }}" \
-              NODE_ENV=production
-
-      # 8. Restart the Web App
-      - name: Restart Web App
-        run: |
-          az webapp restart \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.APP_NAME }}
-
-      # 9. Verify deployment
+      # 8. Verify deployment
       - name: Health check
         run: |
           echo "Waiting for app to start..."
           sleep 30
-          curl -sf https://${{ env.APP_NAME }}.azurewebsites.net/api/health || echo "App is still starting up..."
+          curl -sf "https://integration-dashboard-erdxhhczasejb4hj.westus3-01.azurewebsites.net/api/health" || echo "App is still starting up..."
           echo ""
-          echo "Deployment complete: https://${{ env.APP_NAME }}.azurewebsites.net"
+          echo "Deployment complete: https://integration-dashboard-erdxhhczasejb4hj.westus3-01.azurewebsites.net"
