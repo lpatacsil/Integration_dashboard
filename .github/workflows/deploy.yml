@@ -6,7 +6,8 @@ on:
   workflow_dispatch:  # Allows manual trigger from GitHub UI
 
 env:
-  APP_NAME: integration-dashboard
+  SCM_HOST: integration-dashboard-erdxhhczasejb4hj.scm.westus3-01.azurewebsites.net
+  APP_HOST: integration-dashboard-erdxhhczasejb4hj.westus3-01.azurewebsites.net
 
 jobs:
   build-and-deploy:
@@ -54,19 +55,21 @@ jobs:
         run: |
           zip -r deploy.zip dist/ public/ package.json package-lock.json node_modules/
 
-      # 7. Deploy zip to Azure Web App using publish profile
+      # 7. Deploy zip via Kudu API
       - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.APP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: api/deploy.zip
+        run: |
+          curl -sf -X POST \
+            --user "${{ secrets.AZURE_DEPLOY_USER }}:${{ secrets.AZURE_DEPLOY_PASSWORD }}" \
+            --data-binary @api/deploy.zip \
+            -H "Content-Type: application/zip" \
+            "https://${{ env.SCM_HOST }}/api/zipdeploy?isAsync=false"
+          echo "Zip deploy complete."
 
       # 8. Verify deployment
       - name: Health check
         run: |
           echo "Waiting for app to start..."
           sleep 30
-          curl -sf "https://integration-dashboard-erdxhhczasejb4hj.westus3-01.azurewebsites.net/api/health" || echo "App is still starting up..."
+          curl -sf "https://${{ env.APP_HOST }}/api/health" || echo "App is still starting up..."
           echo ""
-          echo "Deployment complete: https://integration-dashboard-erdxhhczasejb4hj.westus3-01.azurewebsites.net"
+          echo "Deployment complete: https://${{ env.APP_HOST }}"
