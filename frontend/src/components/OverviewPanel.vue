@@ -46,7 +46,7 @@ const nsOpenCount = computed(() => {
         v-for="f in flowCodes"
         :key="f"
         :code="f"
-        :stats="overview?.flowStats?.[f] ?? { name: '', dir: '', severity: 0, total: 0, succeeded: 0, errored: 0, pending_rerun: 0, reruns: 0 }"
+        :stats="overview?.flowStats?.[f] ?? { name: '', dir: '', severity: 0, total: 0, succeeded: 0, errored: 0, resolved: 0, open_errors: 0, pending_rerun: 0, reruns: 0 }"
         :severity="overview?.perFlowSeverity?.[f] ?? 0"
         :sparkline="overview?.sparklines?.[f] ?? []"
         :ns-open-count="f === 'NS' ? nsOpenCount : undefined"

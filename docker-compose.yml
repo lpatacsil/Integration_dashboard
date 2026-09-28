@@ -42,7 +42,8 @@ services:
     ports:
       - "3001:3001"
     environment:
-      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;}
+      # Hardcoded: container must use the Docker-internal hostname, not 127.0.0.1
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
       AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:-teamcentral-logs}
       API_PORT: "3001"
       NETSUITE_ACCOUNT_ID: ${NETSUITE_ACCOUNT_ID:-}

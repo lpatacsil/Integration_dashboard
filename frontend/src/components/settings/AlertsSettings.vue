@@ -8,6 +8,10 @@ const props = defineProps<{
   alerts: Alert[]
 }>()
 
+const emit = defineEmits<{
+  (e: 'updated'): void
+}>()
+
 const { settings, loading, error, load, saveSection } = useSettings()
 
 const escalation = ref<Record<number, { notify: string[]; cc: string[]; renotifyMinutes: number }>>({})
@@ -58,6 +62,7 @@ async function save() {
     thresholds: thresholds.value,
   }
   await saveSection('rules', updatedRules)
+  emit('updated')
   saved.value = true
   setTimeout(() => { saved.value = false }, 3000)
 }
@@ -122,7 +127,8 @@ async function save() {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="level in [1, 2, 3, 4]" :key="level">
+          <template v-for="level in [1, 2, 3, 4]" :key="level">
+          <tr v-if="escalation[level]">
             <td><strong>Sev {{ level }}</strong></td>
             <td>
               <input
@@ -149,6 +155,7 @@ async function save() {
               />
             </td>
           </tr>
+          </template>
         </tbody>
       </table>
     </div>

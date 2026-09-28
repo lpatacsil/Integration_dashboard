@@ -39,8 +39,10 @@ function pillCls(): string {
     </div>
     <div class="nums">
       <div>Processed<b>{{ stats.total || 0 }}</b></div>
+      <div>Succeeded<b>{{ stats.succeeded || 0 }}</b></div>
       <div>Errors<b :class="{ err: stats.errored }">{{ stats.errored || 0 }}</b></div>
-      <div>Pending / re-run<b>{{ stats.pending_rerun || 0 }}</b></div>
+      <div>Resolved<b class="resolved">{{ stats.resolved || 0 }}</b></div>
+      <div>Reruns<b>{{ stats.reruns || 0 }}</b></div>
     </div>
     <SparklineSvg :points="sparkline" />
   </div>

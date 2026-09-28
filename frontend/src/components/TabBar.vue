@@ -9,6 +9,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:activeTab', tab: string): void
+  (e: 'openSettings'): void
 }>()
 
 interface TabDef {
@@ -62,6 +63,9 @@ function isBad(tab: TabDef): boolean {
         class="count"
         :class="{ bad: isBad(tab) }"
       >{{ getCount(tab) }}</span>
+    </button>
+    <button class="settings-btn" @click="emit('openSettings')" title="Settings">
+      &#9881; Settings
     </button>
   </div>
 </template>

@@ -84,6 +84,8 @@ select,input[type=date]{font:inherit;font-size:13px;padding:6px 8px;border:1px s
 .tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
 .tabs .count{font-family:var(--mono);font-size:11px;padding:1px 6px;border-radius:99px;background:var(--surface-2);color:var(--ink-2)}
 .tabs .count.bad{background:var(--crit-soft);color:var(--crit-ink)}
+.tabs .settings-btn{margin-left:auto;color:var(--ink-3);font-size:13px;padding:10px 14px;white-space:nowrap}
+.tabs .settings-btn:hover{color:var(--accent)}
 .panel{display:none;padding:20px 24px 40px}
 .panel.on{display:block}
 
@@ -177,7 +179,10 @@ pre{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;p
 .sidebar.collapsed{width:52px}
 .app-content{margin-left:240px;transition:margin-left .2s ease}
 .sidebar.collapsed+.app-content{margin-left:52px}
-.sidebar-toggle{display:flex;align-items:center;justify-content:center;width:100%;height:40px;border:0;background:none;cursor:pointer;color:var(--ink-2);font-size:18px}
+.sidebar-header{display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--line)}
+.sidebar-back{display:flex;align-items:center;gap:8px;flex:1;padding:10px 16px;border:0;background:none;cursor:pointer;color:var(--accent);font-size:13px;font-weight:600;white-space:nowrap}
+.sidebar-back:hover{background:var(--surface-2)}
+.sidebar-toggle{display:flex;align-items:center;justify-content:center;width:40px;height:40px;border:0;background:none;cursor:pointer;color:var(--ink-2);font-size:18px;flex-shrink:0}
 .sidebar-toggle:hover{color:var(--ink);background:var(--surface-2)}
 .hamburger{font-style:normal}
 .sidebar-section{margin-top:8px}

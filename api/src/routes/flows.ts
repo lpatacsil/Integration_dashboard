@@ -67,8 +67,13 @@ router.get('/:code', async (req: Request, res: Response) => {
     const last14d = await store.queryTransactions({ start: new Date(now.getTime() - 13 * 86400000), end: new Date(now.getTime() + 1000) });
     const sparkline = computeErrorSparkline(last14d.filter(t => t.flow_code === flowCode), 14);
 
-    // Per-flow severity
-    const flowBlocking = toOpenBlockingErrors(openErrorsForFlow, openTxById);
+    // Per-flow severity, scoped to the selected date range by occurred_at (matches overview.ts)
+    const rangeStartMs = range.start.getTime();
+    const rangeEndMs = range.end.getTime();
+    const flowBlocking = toOpenBlockingErrors(openErrorsForFlow, openTxById).filter(e => {
+      const t = new Date(e.occurred_at).getTime();
+      return t >= rangeStartMs && t < rangeEndMs;
+    });
     const hb = await store.getLatestHeartbeat();
     const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
     const severity = classifyFlow(flowBlocking, heartbeatAgeMin, flowCode);

@@ -35,7 +35,7 @@ function buildOncall(): string {
   const esc = o.escalation
   if (esc) {
     const renotify = esc.renotifyMinutes >= 60 ? `${esc.renotifyMinutes / 60} h` : `${esc.renotifyMinutes} min`
-    return `<b>Escalated to</b> <span class="who">${esc.notify.join(', ')}</span><br><b>Copied</b> <span class="who">${esc.cc.join(', ')}</span><br>Re-notify every ${renotify} while open`
+    return `<b>Escalated to</b> <span class="who">${esc.notify.map(c => c.name).join(', ')}</span><br><b>Copied</b> <span class="who">${esc.cc.map(c => c.name).join(', ')}</span><br>Re-notify every ${renotify} while open`
   }
   return `<b>Hotline on standby</b> <span class="who">Larry, Quennie</span><br>Nobody has been paged.`
 }

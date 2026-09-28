@@ -37,11 +37,25 @@ export interface FlowStats {
   total: number
   succeeded: number
   errored: number
+  resolved: number
+  open_errors: number
   pending_rerun: number
   reruns: number
 }
 
+export interface ResolvedContact {
+  key: string
+  name: string
+  email: string
+}
+
 export interface EscalationInfo {
+  notify: ResolvedContact[]
+  cc: ResolvedContact[]
+  renotifyMinutes: number
+}
+
+export interface EscalationRule {
   notify: string[]
   cc: string[]
   renotifyMinutes: number
@@ -82,6 +96,8 @@ export interface ErrorCategory {
   error_group: string
   is_blocking: boolean
   count: number
+  open: number
+  resolved: number
 }
 
 export interface ErrorCategoriesResponse {
@@ -191,13 +207,13 @@ export interface CategoryRule {
 export interface Rules {
   severity: {
     blockingGroups: string[]
-    sev4: { heartbeatMaxMinutes: number; zeroTrafficWindowMinutes: number; useBaseline: boolean }
+    sev4: { enabled: boolean; heartbeatMaxMinutes: number; zeroTrafficWindowMinutes: number; useBaseline: boolean }
     sev3: { minBlocked: number; olderThan: string }
     sev2: { minBlocked: number }
     sev1: { minBlocked: number }
   }
   thresholds: Record<string, number>
-  escalation: Record<number, EscalationInfo>
+  escalation: Record<number, EscalationRule>
 }
 
 export interface RulesResponse {

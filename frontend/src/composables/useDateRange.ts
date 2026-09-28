@@ -24,7 +24,7 @@ function daysAgo(n: number): string {
 }
 
 export function createDateRange(): DateRangeState {
-  const rangeKey = ref('30')
+  const rangeKey = ref('today')
   const customFrom = ref(daysAgo(13))
   const customTo = ref(todayStr())
 

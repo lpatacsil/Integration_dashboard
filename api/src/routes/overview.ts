@@ -5,7 +5,7 @@ import { getRules, getContacts } from '../services/settings-store';
 import { classify, classifyFlow } from '../severity';
 import {
   toOpenBlockingErrors, indexById, groupByFlow, computeFlowCardStats,
-  computeTxLast60, computeBaselineLast60, computeErrorSparkline,
+  computeTxLast60, computeBaselineLast60, computeErrorSparkline, computeFlowErrorResolution,
 } from '../store/aggregate';
 
 const router = Router();
@@ -29,13 +29,18 @@ router.get('/', async (req: Request, res: Response) => {
     const endDatePlus1 = new Date(endDate);
     endDatePlus1.setDate(endDatePlus1.getDate() + 1);
 
-    // 1. Open blocking errors (for severity computation - always "now", not range-filtered)
+    // 1. Open blocking errors, scoped to the selected date range by occurred_at
     const openErrors = await store.getOpenErrors();
     const openErrTransactions = await Promise.all(
       [...new Set(openErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
     );
     const openErrTxById = indexById(openErrTransactions.filter((t): t is NonNullable<typeof t> => !!t));
-    const openBlocking = toOpenBlockingErrors(openErrors, openErrTxById);
+    const rangeStartMs = new Date(startDate).getTime();
+    const rangeEndMs = endDatePlus1.getTime();
+    const openBlocking = toOpenBlockingErrors(openErrors, openErrTxById).filter(e => {
+      const t = new Date(e.occurred_at).getTime();
+      return t >= rangeStartMs && t < rangeEndMs;
+    });
 
     // 2. Latest heartbeat
     const hb = await store.getLatestHeartbeat();
@@ -60,15 +65,25 @@ router.get('/', async (req: Request, res: Response) => {
     const rangeTransactions = await store.queryTransactions({ start: new Date(startDate), end: endDatePlus1 });
     const flowStatsByFlow = groupByFlow(rangeTransactions, computeFlowCardStats);
 
+    const rangeErrors = await store.queryErrors({ start: new Date(startDate), end: endDatePlus1 });
+    const rangeErrTransactions = await Promise.all(
+      [...new Set(rangeErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
+    );
+    const rangeErrTxById = indexById(rangeErrTransactions.filter((t): t is NonNullable<typeof t> => !!t));
+    const flowErrorResolution = computeFlowErrorResolution(rangeErrors, rangeErrTxById);
+
     const flowStats: Record<string, any> = {};
     for (const f of Object.keys(FLOWS)) {
       const stats = flowStatsByFlow[f];
+      const resolution = flowErrorResolution[f];
       flowStats[f] = {
         ...FLOWS[f],
         severity: perFlowSeverity[f],
         total: stats?.total || 0,
         succeeded: stats?.succeeded || 0,
         errored: stats?.errored || 0,
+        resolved: resolution?.resolved || 0,
+        open_errors: resolution?.open || 0,
         pending_rerun: stats?.pending_rerun || 0,
         reruns: stats?.reruns || 0,
       };

@@ -19,13 +19,19 @@ router.get('/', async (req: Request, res: Response) => {
     const endDatePlus1 = new Date(endDate);
     endDatePlus1.setDate(endDatePlus1.getDate() + 1);
 
-    // Current severity state
+    // Current severity state, scoped to the selected date range by occurred_at
+    // (mirrors overview.ts — keeps the Live alerts panel consistent with the dashboard).
     const openErrors = await store.getOpenErrors();
     const openTx = await Promise.all(
       [...new Set(openErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
     );
     const openTxById = indexById(openTx.filter((t): t is NonNullable<typeof t> => !!t));
-    const openBlocking = toOpenBlockingErrors(openErrors, openTxById);
+    const rangeStartMs = new Date(startDate).getTime();
+    const rangeEndMs = endDatePlus1.getTime();
+    const openBlocking = toOpenBlockingErrors(openErrors, openTxById).filter(e => {
+      const t = new Date(e.occurred_at).getTime();
+      return t >= rangeStartMs && t < rangeEndMs;
+    });
 
     const hb = await store.getLatestHeartbeat();
     const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;

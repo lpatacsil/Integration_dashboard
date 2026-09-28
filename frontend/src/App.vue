@@ -28,7 +28,10 @@ const dateRange = provideDateRange()
 const activeView = ref('overview')
 
 const isDashboardView = computed(() =>
-  ['overview', 's2n', 'n2s', 'idx', 'nsint'].includes(activeView.value)
+  !activeView.value.startsWith('settings-')
+)
+const isSettingsView = computed(() =>
+  activeView.value.startsWith('settings-')
 )
 
 // Connection status
@@ -70,6 +73,13 @@ async function loadRules() {
   } catch (e) {
     console.warn('Could not load rules from API:', e)
   }
+}
+
+// After a settings save: reload rules AND recompute severity/overview immediately,
+// instead of waiting for the next 60s auto-refresh.
+async function onSettingsUpdated() {
+  await loadRules()
+  await refresh()
 }
 
 // Main data refresh
@@ -139,14 +149,15 @@ onMounted(async () => {
 </script>
 
 <template>
+  <!-- Settings sidebar (only visible on settings pages) -->
   <SideBar
+    v-if="isSettingsView"
     :active-view="activeView"
-    :incidents="openIncidents?.incidents ?? []"
     :alerts="alerts?.alerts ?? []"
     @update:active-view="activeView = $event"
   />
 
-  <div class="app-content">
+  <div :class="{ 'app-content': isSettingsView }">
     <TopBar :connection-status="connectionStatus" />
 
     <template v-if="isDashboardView">
@@ -156,6 +167,7 @@ onMounted(async () => {
         :incidents="openIncidents?.incidents ?? []"
         :alerts="alerts?.alerts ?? []"
         @update:active-tab="activeView = $event"
+        @open-settings="activeView = 'settings-alerts'"
       />
     </template>
 
@@ -209,13 +221,14 @@ onMounted(async () => {
     <AlertsSettings
       v-if="activeView === 'settings-alerts'"
       :alerts="alerts?.alerts ?? []"
+      @updated="onSettingsUpdated"
     />
 
     <RulesSettings
       v-if="activeView === 'settings-rules'"
       :rules="rules"
       :category-rules="categoryRules"
-      @updated="loadRules()"
+      @updated="onSettingsUpdated"
     />
 
     <ChannelsSettings
