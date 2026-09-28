@@ -31,7 +31,10 @@ export const CONTACTS: Record<string, { name: string; email: string }> = {
 export const RULES = {
   severity: {
     blockingGroups: ['MAPPING', 'INDEXING'],
-    sev4: { heartbeatMaxMinutes: 30, zeroTrafficWindowMinutes: 60, useBaseline: true },
+    // Disabled until the real Team Central connector is wired up to send heartbeats —
+    // until then there's no live signal to distinguish "tool down" from "nobody's pinging it",
+    // so severity is driven by open blocking errors only. Flip to true once integrated.
+    sev4: { enabled: false, heartbeatMaxMinutes: 30, zeroTrafficWindowMinutes: 60, useBaseline: true },
     sev3: { minBlocked: 2, olderThan: 'startOfToday' },
     sev2: { minBlocked: 2 },
     sev1: { minBlocked: 1 },

@@ -18,7 +18,7 @@ export interface SettingsData {
   rules: {
     severity: {
       blockingGroups: string[];
-      sev4: { heartbeatMaxMinutes: number; zeroTrafficWindowMinutes: number; useBaseline: boolean };
+      sev4: { enabled: boolean; heartbeatMaxMinutes: number; zeroTrafficWindowMinutes: number; useBaseline: boolean };
       sev3: { minBlocked: number; olderThan: string };
       sev2: { minBlocked: number };
       sev1: { minBlocked: number };
