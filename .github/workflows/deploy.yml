@@ -44,6 +44,7 @@ jobs:
       # 5. Copy frontend build into API public folder
       - name: Copy frontend to API public
         run: |
+          mkdir -p api/public
           rm -rf api/public/assets api/public/index.html
           cp -r frontend/dist/* api/public/
 
