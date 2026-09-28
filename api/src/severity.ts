@@ -8,6 +8,8 @@ export interface OpenBlockingError {
   error_code: string;
   error_message: string;
   occurred_at: string;
+  sales_order_id: string | null;
+  transaction_type: string;
 }
 
 export function startOfToday(): Date {
@@ -23,9 +25,9 @@ export function classify(
   baselineLast60: number,
 ): number {
   const s = getRules().severity;
-  if (heartbeatAgeMin > s.sev4.heartbeatMaxMinutes || (txLast60 === 0 && baselineLast60 > 0)) return 4;
+  if (s.sev4.enabled && (heartbeatAgeMin > s.sev4.heartbeatMaxMinutes || (txLast60 === 0 && baselineLast60 > 0))) return 4;
   const n = openBlocking.length;
-  if (n === 0) return 0;
+  if (n < s.sev1.minBlocked) return 0;
   const today = startOfToday();
   const crossed = openBlocking.some(e => new Date(e.occurred_at) < today);
   if (n >= s.sev3.minBlocked && crossed) return 3;

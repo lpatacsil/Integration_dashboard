@@ -23,6 +23,8 @@ interface AlertContext {
   openedAt: string;
   age: string;
   entityRefs: string;
+  soNumbers: string;
+  draftIds: string;
   rawMessage: string;
   playbookStep: string;
   notify: string[];
@@ -53,6 +55,10 @@ const PLAYBOOK: Record<string, string> = {
   'CONN-DOWN': 'Check connector service health; restart if needed',
 };
 
+function dedupe(arr: string[]): string[] {
+  return [...new Set(arr)];
+}
+
 function formatAge(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = Math.floor(minutes % 60);
@@ -66,16 +72,20 @@ function renderSubject(ctx: AlertContext): string {
 }
 
 function renderBody(ctx: AlertContext): string {
-  return `Severity:        ${ctx.level}  (${ctx.levelName})
+  let body = `Severity:        ${ctx.level}  (${ctx.levelName})
 Flow / process:  ${ctx.flow}
 Category:        ${ctx.categoryCode} – ${ctx.categoryLabel}
 Current count:   ${ctx.count}   Threshold / rule: ${ctx.rule}
 First seen:      ${ctx.openedAt}    Age: ${ctx.age}
-Transactions:    ${ctx.entityRefs}
+Transactions:    ${ctx.entityRefs}`;
+  if (ctx.soNumbers) body += `\nSO number(s):    ${ctx.soNumbers}`;
+  if (ctx.draftIds) body += `\nDraft ID(s):     ${ctx.draftIds}`;
+  body += `
 Error text:      ${ctx.rawMessage}
 Recommended:     ${ctx.playbookStep}
 Escalated to:    ${ctx.notify.join(', ')}   Cc: ${ctx.cc.join(', ') || '—'}
 Next reminder:   in ${ctx.renotifyMinutes >= 60 ? ctx.renotifyMinutes / 60 + ' h' : ctx.renotifyMinutes + ' min'} unless resolved or level changes`;
+  return body;
 }
 
 function renderResolvedSubject(flow: string, categoryCode: string): string {
@@ -154,6 +164,8 @@ export async function evaluate(): Promise<EvaluationResult> {
     flowCode: string;
     errorCode: string;
     entityRefs: string[];
+    soNumbers: string[];
+    draftIds: string[];
     errorMessages: string[];
     oldestAt: Date;
     count: number;
@@ -166,14 +178,22 @@ export async function evaluate(): Promise<EvaluationResult> {
       existing.count++;
       existing.entityRefs.push(err.entity_identifier);
       existing.errorMessages.push(err.error_message);
+      if (err.sales_order_id) existing.soNumbers.push(err.sales_order_id);
+      if (err.transaction_type === 'Draft Order') existing.draftIds.push(err.entity_identifier);
       if (new Date(err.occurred_at) < existing.oldestAt) {
         existing.oldestAt = new Date(err.occurred_at);
       }
     } else {
+      const soNumbers: string[] = [];
+      const draftIds: string[] = [];
+      if (err.sales_order_id) soNumbers.push(err.sales_order_id);
+      if (err.transaction_type === 'Draft Order') draftIds.push(err.entity_identifier);
       currentIncidents.set(key, {
         flowCode: err.flow_code,
         errorCode: err.error_code,
         entityRefs: [err.entity_identifier],
+        soNumbers,
+        draftIds,
         errorMessages: [err.error_message],
         oldestAt: new Date(err.occurred_at),
         count: 1,
@@ -220,6 +240,8 @@ export async function evaluate(): Promise<EvaluationResult> {
         flowCode: check.flowCode,
         errorCode: check.code,
         entityRefs: [],
+        soNumbers: [],
+        draftIds: [],
         errorMessages: [`${check.label}: ${check.count} in range vs threshold ${check.threshold}`],
         oldestAt: now,
         count: check.count,
@@ -233,6 +255,8 @@ export async function evaluate(): Promise<EvaluationResult> {
       flowCode: 'ALL',
       errorCode: 'CONN-DOWN',
       entityRefs: [],
+      soNumbers: [],
+      draftIds: [],
       errorMessages: [`Connector heartbeat missing (${Math.round(heartbeatAgeMin)} min ago) / zero throughput`],
       oldestAt: now,
       count: 1,
@@ -266,6 +290,8 @@ export async function evaluate(): Promise<EvaluationResult> {
       openedAt: incident.oldestAt.toISOString(),
       age: formatAge(ageMin),
       entityRefs: incident.entityRefs.slice(0, 5).join(', ') + (incident.entityRefs.length > 5 ? ` +${incident.entityRefs.length - 5}` : ''),
+      soNumbers: dedupe(incident.soNumbers).slice(0, 5).join(', ') + (dedupe(incident.soNumbers).length > 5 ? ` +${dedupe(incident.soNumbers).length - 5}` : ''),
+      draftIds: dedupe(incident.draftIds).slice(0, 5).join(', ') + (dedupe(incident.draftIds).length > 5 ? ` +${dedupe(incident.draftIds).length - 5}` : ''),
       rawMessage: incident.errorMessages[0] || '—',
       playbookStep: PLAYBOOK[incident.errorCode] || 'Investigate and resolve',
       notify: esc.notify,

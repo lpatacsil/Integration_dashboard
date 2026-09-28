@@ -50,6 +50,8 @@ export function toOpenBlockingErrors(
         error_code: e.error_code || '',
         error_message: e.error_message,
         occurred_at: e.occurred_at,
+        sales_order_id: tx?.sales_order_id ?? null,
+        transaction_type: tx?.transaction_type || '',
       };
     });
 }
@@ -83,6 +85,22 @@ export function toOpenIncidents(openErrors: IntegrationError[], transactionsById
 
 export interface FlowCardStats {
   total: number; succeeded: number; errored: number; pending_rerun: number; reruns: number;
+}
+
+export interface FlowErrorResolution { resolved: number; open: number }
+
+/** Per-flow split of range errors into resolved vs still-open, by IntegrationError.resolved_at. */
+export function computeFlowErrorResolution(
+  errors: IntegrationError[], transactionsById: Map<string, Transaction>,
+): Record<string, FlowErrorResolution> {
+  const out: Record<string, FlowErrorResolution> = {};
+  for (const e of errors) {
+    const flow = transactionsById.get(e.transaction_id)?.flow_code;
+    if (!flow) continue;
+    const row = out[flow] || (out[flow] = { resolved: 0, open: 0 });
+    if (e.resolved_at) row.resolved++; else row.open++;
+  }
+  return out;
 }
 
 /** Matches overview.ts's per-flow flowStatsRes query. */
@@ -205,7 +223,7 @@ export function computeDailyBreakdown(transactions: Transaction[], limit = 10): 
 
 export interface ErrorCategoryRow {
   error_code: string | null; category_label: string | null; error_group: string | null;
-  is_blocking: boolean; count: number;
+  is_blocking: boolean; count: number; open: number; resolved: number;
 }
 
 export function computeErrorCategorySummary(errors: IntegrationError[]): ErrorCategoryRow[] {
@@ -214,9 +232,10 @@ export function computeErrorCategorySummary(errors: IntegrationError[]): ErrorCa
     const key = e.error_code || 'UNKNOWN';
     const row = byCode.get(key) || {
       error_code: e.error_code, category_label: e.category_label,
-      error_group: e.error_group, is_blocking: e.is_blocking, count: 0,
+      error_group: e.error_group, is_blocking: e.is_blocking, count: 0, open: 0, resolved: 0,
     };
     row.count++;
+    if (e.resolved_at) { row.resolved++; } else { row.open++; }
     byCode.set(key, row);
   }
   return [...byCode.values()].sort((a, b) => b.count - a.count);
