@@ -6,7 +6,7 @@ on:
   workflow_dispatch:  # Allows manual trigger from GitHub UI
 
 env:
-  SCM_HOST: integration-dashboard-erdxhhczasejb4hj.scm.westus3-01.azurewebsites.net
+  APP_NAME: integration-dashboard
   APP_HOST: integration-dashboard-erdxhhczasejb4hj.westus3-01.azurewebsites.net
 
 jobs:
@@ -55,22 +55,13 @@ jobs:
         run: |
           zip -r deploy.zip dist/ public/ package.json package-lock.json node_modules/
 
-      # 7. Deploy zip via Kudu API
+      # 7. Deploy zip to Azure Web App using publish profile
       - name: Deploy to Azure Web App
-        run: |
-          HTTP_CODE=$(curl -s -o /tmp/deploy_response.txt -w "%{http_code}" -X POST \
-            --user "${{ secrets.AZURE_DEPLOY_USER }}:${{ secrets.AZURE_DEPLOY_PASSWORD }}" \
-            --data-binary @api/deploy.zip \
-            -H "Content-Type: application/zip" \
-            "https://${{ env.SCM_HOST }}/api/zipdeploy?isAsync=true")
-          echo "HTTP status: $HTTP_CODE"
-          cat /tmp/deploy_response.txt || true
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-            echo "Deployment failed with HTTP $HTTP_CODE"
-            exit 1
-          fi
-          echo "Zip deploy initiated. Waiting for deployment to complete..."
-          sleep 30
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.APP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: api/deploy.zip
 
       # 8. Verify deployment
       - name: Health check
