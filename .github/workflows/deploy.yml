@@ -58,12 +58,19 @@ jobs:
       # 7. Deploy zip via Kudu API
       - name: Deploy to Azure Web App
         run: |
-          curl -sf -X POST \
+          HTTP_CODE=$(curl -s -o /tmp/deploy_response.txt -w "%{http_code}" -X POST \
             --user "${{ secrets.AZURE_DEPLOY_USER }}:${{ secrets.AZURE_DEPLOY_PASSWORD }}" \
             --data-binary @api/deploy.zip \
             -H "Content-Type: application/zip" \
-            "https://${{ env.SCM_HOST }}/api/zipdeploy?isAsync=false"
-          echo "Zip deploy complete."
+            "https://${{ env.SCM_HOST }}/api/zipdeploy?isAsync=true")
+          echo "HTTP status: $HTTP_CODE"
+          cat /tmp/deploy_response.txt || true
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "Deployment failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+          echo "Zip deploy initiated. Waiting for deployment to complete..."
+          sleep 30
 
       # 8. Verify deployment
       - name: Health check
