@@ -17,6 +17,7 @@ import netsuiteRouter from './routes/netsuite';
 import alertEngineRouter from './routes/alert-engine';
 import settingsRouter from './routes/settings';
 import { loadSettings } from './services/settings-store';
+import { seed } from './seed';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || process.env.API_PORT || '3001', 10);
@@ -36,6 +37,24 @@ app.use('/api/rules', rulesRouter);
 app.use('/api/netsuite', netsuiteRouter);
 app.use('/api/alert-engine', alertEngineRouter);
 app.use('/api/settings', settingsRouter);
+
+// Seed endpoint — runs within the app process so managed identity works
+let seedStatus: { running: boolean; result?: string; error?: string } = { running: false };
+app.post('/api/seed', (req, res) => {
+  if (seedStatus.running) {
+    res.json({ status: 'already_running' });
+    return;
+  }
+  seedStatus = { running: true };
+  const csvDir = (req.query.dir as string) || path.join(__dirname, '..', 'csv-data');
+  seed(csvDir)
+    .then(() => { seedStatus = { running: false, result: 'Seed complete' }; })
+    .catch((err: any) => { seedStatus = { running: false, error: err.message }; });
+  res.json({ status: 'started', message: 'Seeding in background. GET /api/seed/status to check.' });
+});
+app.get('/api/seed/status', (_req, res) => {
+  res.json(seedStatus);
+});
 
 // Serve built frontend if public/ directory exists
 const publicDir = path.join(__dirname, '..', 'public');

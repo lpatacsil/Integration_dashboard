@@ -58,7 +58,7 @@ function endpointToFlow(endpointName: string, system: string): string {
   const ep = endpointName.toLowerCase();
   if (ep.includes('save ecomm order') || ep.includes('update work order')) return 'S2N';
   if (ep.includes('shopify - read') || ep.includes('sh - update draft') || ep.includes('ns - update draft')) return 'N2S';
-  if (ep.includes('netsuite - sales order')) return 'NS';
+  if (ep.includes('netsuite - sales order')) return 'S2N';
   if (ep.includes('save order fulfillment')) return 'N2S';
   if (ep.includes('save items') || ep.includes('index') || ep.includes('save customer') || ep.includes('contact save') || ep.includes('company')) return 'IDX';
   if (ep.includes('shopify - company') || ep.includes('shopify - contact') || ep.includes('shopify - price')) return 'IDX';
@@ -98,12 +98,48 @@ function normalizeStatus(errors: number): string {
   return errors > 0 ? 'FAILED' : 'SUCCESS';
 }
 
-async function seed() {
-  const csvDir = process.argv[2] || path.resolve('C:\\Users\\Lenie\\Downloads\\team central data source');
-  const messagesPath = path.join(csvDir, 'Message logs from team central.csv');
-  const errorsPath = path.join(csvDir, 'Error logs in team central.csv');
+/** Find messages and errors CSV files in a directory by header detection. */
+function findCSVFiles(dir: string): { messagesPath: string; errorsPath: string } {
+  // Try well-known names first
+  const knownMessages = ['Message logs from team central.csv', 'export (7).csv'];
+  const knownErrors = ['Error logs in team central.csv', 'export (6).csv'];
+  const files = fs.readdirSync(dir).filter(f => f.endsWith('.csv'));
+
+  let messagesPath = '';
+  let errorsPath = '';
+
+  for (const name of knownMessages) {
+    if (files.includes(name)) { messagesPath = path.join(dir, name); break; }
+  }
+  for (const name of knownErrors) {
+    if (files.includes(name)) { errorsPath = path.join(dir, name); break; }
+  }
+
+  // Fallback: detect by header content
+  if (!messagesPath || !errorsPath) {
+    for (const f of files) {
+      const filePath = path.join(dir, f);
+      const firstLine = fs.readFileSync(filePath, 'utf-8').split('\n')[0];
+      if (!messagesPath && firstLine.includes('System') && firstLine.includes('Transaction Type')) {
+        messagesPath = filePath;
+      } else if (!errorsPath && firstLine.includes('Endpoint Name') && firstLine.includes('Error Text')) {
+        errorsPath = filePath;
+      }
+    }
+  }
+
+  if (!messagesPath) throw new Error(`No messages CSV found in ${dir}. Expected headers: System, Transaction Type`);
+  if (!errorsPath) throw new Error(`No errors CSV found in ${dir}. Expected headers: Endpoint Name, Error Text`);
+  return { messagesPath, errorsPath };
+}
+
+export async function seed(csvDirOverride?: string) {
+  const csvDir = csvDirOverride || process.argv[2] || path.resolve('C:\\Users\\Lenie\\Downloads\\team central data source');
+  const { messagesPath, errorsPath } = findCSVFiles(csvDir);
 
   console.log('Reading CSV files...');
+  console.log(`  Messages file: ${messagesPath}`);
+  console.log(`  Errors file: ${errorsPath}`);
   const messages = parseCSV(messagesPath);
   const errors = parseCSV(errorsPath);
   console.log(`  Messages: ${messages.length} rows`);
@@ -317,7 +353,10 @@ async function seed() {
   });
 }
 
-seed().catch(err => {
-  console.error('Seed failed:', err);
-  process.exit(1);
-});
+// Only run directly when invoked as a script (not imported as a module)
+if (require.main === module) {
+  seed().catch(err => {
+    console.error('Seed failed:', err);
+    process.exit(1);
+  });
+}
