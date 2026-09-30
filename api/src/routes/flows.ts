@@ -30,8 +30,17 @@ router.get('/:code', async (req: Request, res: Response) => {
     endDatePlus1.setDate(endDatePlus1.getDate() + 1);
     const range = { start: new Date(startDate), end: endDatePlus1 };
 
-    const rangeTransactions = (await store.queryTransactions(range)).filter(t => t.flow_code === flowCode);
-    const rangeErrors = (await store.queryErrors(range)).filter(e => rangeTransactions.some(t => t.id === e.transaction_id));
+    // Run independent data fetches in parallel
+    const [rangeTransactionsAll, rangeErrorsAll, openErrorsAll, last14d, hb] = await Promise.all([
+      store.queryTransactions(range),
+      store.queryErrors(range),
+      store.getOpenErrors(),
+      store.queryTransactions({ start: new Date(now.getTime() - 13 * 86400000), end: new Date(now.getTime() + 1000) }),
+      store.getLatestHeartbeat(),
+    ]);
+
+    const rangeTransactions = rangeTransactionsAll.filter(t => t.flow_code === flowCode);
+    const rangeErrors = rangeErrorsAll.filter(e => rangeTransactions.some(t => t.id === e.transaction_id));
     const rangeTxById = indexById(rangeTransactions);
 
     // KPI stats: for NS flow, only count FAILED transactions with a NETSUITE-group error
@@ -52,7 +61,6 @@ router.get('/:code', async (req: Request, res: Response) => {
     const daily = computeDailyBreakdown(rangeTransactions, 10);
 
     // Open incidents (regardless of range)
-    const openErrorsAll = await store.getOpenErrors();
     const openFlowTxIds = new Set(rangeTransactions.map(t => t.id));
     // Open incidents aren't range-bound, so re-fetch transactions for any open error not already in range
     const openTxNeeded = [...new Set(openErrorsAll.map(e => e.transaction_id))].filter(id => !rangeTxById.has(id));
@@ -64,7 +72,6 @@ router.get('/:code', async (req: Request, res: Response) => {
     const openIncidents = toOpenIncidents(openErrorsForFlow, openTxById);
 
     // Sparkline: errors per day, last 14 days
-    const last14d = await store.queryTransactions({ start: new Date(now.getTime() - 13 * 86400000), end: new Date(now.getTime() + 1000) });
     const sparkline = computeErrorSparkline(last14d.filter(t => t.flow_code === flowCode), 14);
 
     // Per-flow severity, scoped to the selected date range by occurred_at (matches overview.ts)
@@ -74,7 +81,6 @@ router.get('/:code', async (req: Request, res: Response) => {
       const t = new Date(e.occurred_at).getTime();
       return t >= rangeStartMs && t < rangeEndMs;
     });
-    const hb = await store.getLatestHeartbeat();
     const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
     const severity = classifyFlow(flowBlocking, heartbeatAgeMin, flowCode);
 

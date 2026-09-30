@@ -161,9 +161,13 @@ async function main() {
     const d = err['Message Date'] || '';
     if (d) { const t = parseDate(d).getTime(); if (!isNaN(t) && t > maxTs) maxTs = t; }
   }
-  // Shift so the latest CSV date becomes today
-  const today = new Date(); today.setHours(23, 59, 59, 0);
-  const dateOffsetMs = today.getTime() - maxTs;
+  // Shift so the latest CSV date's dayKey (UTC) aligns with the target date.
+  // Accept --target-date=YYYY-MM-DD to sync with a specific server date.
+  const targetArg = process.argv.find(a => a.startsWith('--target-date='));
+  const targetDate = targetArg ? targetArg.split('=')[1] : new Date().toISOString().slice(0, 10);
+  console.log(`  Target date (for dayKey alignment): ${targetDate}`);
+  const maxTsDayKey = new Date(maxTs).toISOString().slice(0, 10);
+  const dateOffsetMs = new Date(targetDate + 'T12:00:00Z').getTime() - new Date(maxTsDayKey + 'T12:00:00Z').getTime();
   const offsetDays = Math.round(dateOffsetMs / 86400000);
   console.log(`  Latest CSV date: ${new Date(maxTs).toISOString().slice(0,10)}`);
   console.log(`  Shifting all dates forward by ${offsetDays} days to reach today`);

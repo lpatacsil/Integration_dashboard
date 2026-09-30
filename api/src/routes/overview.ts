@@ -29,8 +29,16 @@ router.get('/', async (req: Request, res: Response) => {
     const endDatePlus1 = new Date(endDate);
     endDatePlus1.setDate(endDatePlus1.getDate() + 1);
 
+    // Run independent data fetches in parallel
+    const [openErrors, hb, last28d, rangeTransactions, rangeErrors] = await Promise.all([
+      store.getOpenErrors(),
+      store.getLatestHeartbeat(),
+      store.queryTransactions({ start: new Date(now.getTime() - 28 * 86400000), end: new Date(now.getTime() + 1000) }),
+      store.queryTransactions({ start: new Date(startDate), end: endDatePlus1 }),
+      store.queryErrors({ start: new Date(startDate), end: endDatePlus1 }),
+    ]);
+
     // 1. Open blocking errors, scoped to the selected date range by occurred_at
-    const openErrors = await store.getOpenErrors();
     const openErrTransactions = await Promise.all(
       [...new Set(openErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
     );
@@ -42,12 +50,10 @@ router.get('/', async (req: Request, res: Response) => {
       return t >= rangeStartMs && t < rangeEndMs;
     });
 
-    // 2. Latest heartbeat
-    const hb = await store.getLatestHeartbeat();
+    // 2. Heartbeat age
     const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
 
-    // 3 & 4. Transactions in last 60 min + 28-day baseline (one query covers both)
-    const last28d = await store.queryTransactions({ start: new Date(now.getTime() - 28 * 86400000), end: new Date(now.getTime() + 1000) });
+    // 3 & 4. Transactions in last 60 min + 28-day baseline
     const txLast60 = computeTxLast60(last28d, now);
     const baselineLast60 = computeBaselineLast60(last28d, now);
 
@@ -62,10 +68,8 @@ router.get('/', async (req: Request, res: Response) => {
     }
 
     // 7. Flow card stats (in range)
-    const rangeTransactions = await store.queryTransactions({ start: new Date(startDate), end: endDatePlus1 });
     const flowStatsByFlow = groupByFlow(rangeTransactions, computeFlowCardStats);
 
-    const rangeErrors = await store.queryErrors({ start: new Date(startDate), end: endDatePlus1 });
     const rangeErrTransactions = await Promise.all(
       [...new Set(rangeErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
     );

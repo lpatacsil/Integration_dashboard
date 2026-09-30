@@ -70,9 +70,9 @@ async function queryDayRange<T extends { [k: string]: any }>(
   prefix: string, range: DateRange, timestampField: string,
 ): Promise<T[]> {
   const keys = daysBetween(range);
+  const allRecords = await Promise.all(keys.map(key => loadDayRecords<T>(prefix, key)));
   const results: T[] = [];
-  for (const key of keys) {
-    const records = await loadDayRecords<T>(prefix, key);
+  for (const records of allRecords) {
     for (const rec of Object.values(records)) {
       if (inRange(rec[timestampField], range)) results.push(rec);
     }
@@ -338,13 +338,18 @@ export function createBlobStore(): Store {
       const ids = await indexGet<string[]>(IDX.openErrorIds, []);
       if (ids.length === 0) return [];
       const dayMap = await indexGet<Record<string, string>>(IDX.errorIdToDay, {});
-      const dayCache = new Map<string, Record<string, IntegrationError>>();
+      // Collect unique day keys and load all needed day-files in parallel
+      const uniqueDays = new Set<string>();
+      for (const id of ids) { const k = dayMap[id]; if (k) uniqueDays.add(k); }
+      const dayEntries = await Promise.all(
+        [...uniqueDays].map(async key => [key, await loadDayRecords<IntegrationError>('errors', key)] as const),
+      );
+      const dayCache = new Map(dayEntries);
       const results: IntegrationError[] = [];
       for (const id of ids) {
         const key = dayMap[id];
         if (!key) continue;
-        if (!dayCache.has(key)) dayCache.set(key, await loadDayRecords<IntegrationError>('errors', key));
-        const rec = dayCache.get(key)![id];
+        const rec = dayCache.get(key)?.[id];
         if (rec && !rec.resolved_at && rec.is_current) results.push(rec);
       }
       results.sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
