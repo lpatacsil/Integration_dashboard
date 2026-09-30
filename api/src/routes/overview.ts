@@ -39,10 +39,8 @@ router.get('/', async (req: Request, res: Response) => {
     ]);
 
     // 1. Open blocking errors, scoped to the selected date range by occurred_at
-    const openErrTransactions = await Promise.all(
-      [...new Set(openErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
-    );
-    const openErrTxById = indexById(openErrTransactions.filter((t): t is NonNullable<typeof t> => !!t));
+    const openErrTxMap = await store.getTransactionsByIds([...new Set(openErrors.map(e => e.transaction_id))]);
+    const openErrTxById = indexById([...openErrTxMap.values()]);
     const rangeStartMs = new Date(startDate).getTime();
     const rangeEndMs = endDatePlus1.getTime();
     const openBlocking = toOpenBlockingErrors(openErrors, openErrTxById).filter(e => {
@@ -70,10 +68,8 @@ router.get('/', async (req: Request, res: Response) => {
     // 7. Flow card stats (in range)
     const flowStatsByFlow = groupByFlow(rangeTransactions, computeFlowCardStats);
 
-    const rangeErrTransactions = await Promise.all(
-      [...new Set(rangeErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
-    );
-    const rangeErrTxById = indexById(rangeErrTransactions.filter((t): t is NonNullable<typeof t> => !!t));
+    const rangeErrTxMap = await store.getTransactionsByIds([...new Set(rangeErrors.map(e => e.transaction_id))]);
+    const rangeErrTxById = indexById([...rangeErrTxMap.values()]);
     const flowErrorResolution = computeFlowErrorResolution(rangeErrors, rangeErrTxById);
 
     const flowStats: Record<string, any> = {};

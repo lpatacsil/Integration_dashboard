@@ -134,6 +134,7 @@ export interface Store {
   insertTransaction(tx: Omit<Transaction, 'id' | 'created_at' | 'updated_at'> & Partial<Pick<Transaction, 'created_at'>>): Promise<Transaction>;
   updateTransaction(id: string, patch: Partial<Transaction>): Promise<void>;
   getTransactionById(id: string): Promise<Transaction | null>;
+  getTransactionsByIds(ids: string[]): Promise<Map<string, Transaction>>;
   getTransactionBySalesOrderId(salesOrderId: string): Promise<Transaction | null>;
   queryTransactions(range: DateRange): Promise<Transaction[]>;
   findTransactionsNeedingNetsuiteSync(limit: number): Promise<Transaction[]>;

@@ -64,8 +64,8 @@ router.get('/:code', async (req: Request, res: Response) => {
     const openFlowTxIds = new Set(rangeTransactions.map(t => t.id));
     // Open incidents aren't range-bound, so re-fetch transactions for any open error not already in range
     const openTxNeeded = [...new Set(openErrorsAll.map(e => e.transaction_id))].filter(id => !rangeTxById.has(id));
-    const extraTx = await Promise.all(openTxNeeded.map(id => store.getTransactionById(id)));
-    const openTxById = indexById([...rangeTransactions, ...extraTx.filter((t): t is NonNullable<typeof t> => !!t)]);
+    const extraTxMap = await store.getTransactionsByIds(openTxNeeded);
+    const openTxById = indexById([...rangeTransactions, ...extraTxMap.values()]);
 
     let openErrorsForFlow = errorsForFlow(openErrorsAll, openTxById, flowCode);
     if (flowCode === 'NS') openErrorsForFlow = openErrorsForFlow.filter(e => e.error_group === 'NETSUITE');
@@ -142,10 +142,10 @@ router.get('/:code', async (req: Request, res: Response) => {
       const allRangeTx = indexById(await store.queryTransactions(range));
       const needsSummary = computeIndexingNeedsSummary(allRangeErrors, allRangeTx);
 
-      const allOpenErrors = await store.getOpenErrors();
+      const allOpenErrors = openErrorsAll;
       const openTxIds = [...new Set(allOpenErrors.map(e => e.transaction_id))];
-      const openTx = await Promise.all(openTxIds.map(id => store.getTransactionById(id)));
-      const openTxIdx = indexById(openTx.filter((t): t is NonNullable<typeof t> => !!t));
+      const openTxBatch = await store.getTransactionsByIds(openTxIds);
+      const openTxIdx = indexById([...openTxBatch.values()]);
       const openOrders = computeIndexingNeedsOpenOrders(allOpenErrors, openTxIdx);
 
       indexingNeeds = { ...needsSummary, openOrders };

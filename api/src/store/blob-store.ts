@@ -204,6 +204,32 @@ export function createBlobStore(): Store {
       return records[id] ?? null;
     },
 
+    async getTransactionsByIds(ids) {
+      if (ids.length === 0) return new Map();
+      const dayMap = await indexGet<Record<string, string>>(IDX.txIdToDay, {});
+      // Group ids by day key, then load each needed day file in parallel
+      const byDay = new Map<string, string[]>();
+      for (const id of ids) {
+        const key = dayMap[id];
+        if (!key) continue;
+        if (!byDay.has(key)) byDay.set(key, []);
+        byDay.get(key)!.push(id);
+      }
+      const dayEntries = await Promise.all(
+        [...byDay.keys()].map(async key => [key, await loadDayRecords<Transaction>('transactions', key)] as const),
+      );
+      const dayCache = new Map(dayEntries);
+      const result = new Map<string, Transaction>();
+      for (const [key, dayIds] of byDay) {
+        const records = dayCache.get(key);
+        if (!records) continue;
+        for (const id of dayIds) {
+          if (records[id]) result.set(id, records[id]);
+        }
+      }
+      return result;
+    },
+
     async getTransactionBySalesOrderId(salesOrderId) {
       const soIndex = await indexGet<Record<string, string[]>>(IDX.txSalesOrder, {});
       const ids = soIndex[salesOrderId] || [];
