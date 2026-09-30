@@ -16,6 +16,7 @@ import rulesRouter from './routes/rules';
 import netsuiteRouter from './routes/netsuite';
 import alertEngineRouter from './routes/alert-engine';
 import settingsRouter from './routes/settings';
+import csvImportRouter from './routes/csv-import';
 import { loadSettings } from './services/settings-store';
 import { seed } from './seed';
 
@@ -23,7 +24,7 @@ const app = express();
 const PORT = parseInt(process.env.PORT || process.env.API_PORT || '3001', 10);
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 app.use('/api/health', healthRouter);
 app.use('/api/overview', overviewRouter);
@@ -37,6 +38,7 @@ app.use('/api/rules', rulesRouter);
 app.use('/api/netsuite', netsuiteRouter);
 app.use('/api/alert-engine', alertEngineRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/csv-import', express.json({ limit: '50mb' }), csvImportRouter);
 
 // Seed endpoint — runs within the app process so managed identity works
 let seedStatus: { running: boolean; result?: string; error?: string } = { running: false };

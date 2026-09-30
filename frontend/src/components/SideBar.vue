@@ -30,6 +30,7 @@ const settingsItems: NavItem[] = [
   { key: 'settings-rules', label: 'Rules & Logic', icon: '⚙' },
   { key: 'settings-channels', label: 'Notification Channels', icon: '✉' },
   { key: 'settings-contacts', label: 'Contacts', icon: '⊕' },
+  { key: 'settings-csv-import', label: 'CSV Import', icon: '↑' },
 ]
 
 const isSettingsView = (view: string) => view.startsWith('settings-')

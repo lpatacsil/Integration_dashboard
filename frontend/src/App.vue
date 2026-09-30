@@ -20,6 +20,7 @@ import AlertsSettings from './components/settings/AlertsSettings.vue'
 import RulesSettings from './components/settings/RulesSettings.vue'
 import ChannelsSettings from './components/settings/ChannelsSettings.vue'
 import ContactsSettings from './components/settings/ContactsSettings.vue'
+import CsvImportSettings from './components/settings/CsvImportSettings.vue'
 
 // Date range (provided to children via inject)
 const dateRange = provideDateRange()
@@ -237,6 +238,10 @@ onMounted(async () => {
 
     <ContactsSettings
       v-if="activeView === 'settings-contacts'"
+    />
+
+    <CsvImportSettings
+      v-if="activeView === 'settings-csv-import'"
     />
   </div>
 </template>
