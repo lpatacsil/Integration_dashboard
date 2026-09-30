@@ -394,7 +394,7 @@ async function main() {
   await writeJson('index/open-error-ids.json', openErrorIds); blobCount++;
   await writeJson('index/rerun-id-to-day.json', rerunIdToDay); blobCount++;
   await writeJson('index/rerun-tx-to-ids.json', rerunTxToIds); blobCount++;
-  await writeJson('index/unsent-notifications.json', {}); blobCount++;
+  await writeJson('index/unsent-notifications.json', []); blobCount++;
   await writeJson('index/pending-tx-ids.json', pendingTxIds); blobCount++;
 
   // Heartbeat + severity snapshot

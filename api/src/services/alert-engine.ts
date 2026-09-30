@@ -142,17 +142,16 @@ export async function evaluate(): Promise<EvaluationResult> {
 
   // ── 1. Gather current state ────────────────────────────────────────────
 
-  const openErrors = await store.getOpenErrors();
-  const openTx = await Promise.all(
-    [...new Set(openErrors.map(e => e.transaction_id))].map(id => store.getTransactionById(id)),
-  );
-  const openTxById = indexById(openTx.filter((t): t is NonNullable<typeof t> => !!t));
+  const [openErrors, hb, last28d] = await Promise.all([
+    store.getOpenErrors(),
+    store.getLatestHeartbeat(),
+    store.queryTransactions({ start: new Date(now.getTime() - 28 * 86400000), end: new Date(now.getTime() + 1000) }),
+  ]);
+  const openTxMap = await store.getTransactionsByIds([...new Set(openErrors.map(e => e.transaction_id))]);
+  const openTxById = indexById([...openTxMap.values()]);
   const openBlocking = toOpenBlockingErrors(openErrors, openTxById);
 
-  const hb = await store.getLatestHeartbeat();
   const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
-
-  const last28d = await store.queryTransactions({ start: new Date(now.getTime() - 28 * 86400000), end: new Date(now.getTime() + 1000) });
   const txLast60 = computeTxLast60(last28d, now);
   const baselineLast60 = computeBaselineLast60(last28d, now);
 
