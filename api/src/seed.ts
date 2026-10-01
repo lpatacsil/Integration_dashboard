@@ -1,10 +1,10 @@
 import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
-import { getStore } from './store';
-import { ensureContainer, clearContainer } from './store/blob-client';
+import { ulid } from 'ulid';
+import { ensureContainer, clearContainer, writeJson } from './store/blob-client';
 import { getCategoryRules } from './services/settings-store';
-import type { Transaction } from './store/types';
+import type { Transaction, IntegrationError, Rerun, IndexingActivity } from './store/types';
 
 // ── CSV parsing (handles quoted fields with commas) ──
 function parseCSVLine(line: string): string[] {
@@ -98,6 +98,16 @@ function normalizeStatus(errors: number): string {
   return errors > 0 ? 'FAILED' : 'SUCCESS';
 }
 
+function dayKey(d: Date | string): string {
+  const date = typeof d === 'string' ? new Date(d) : d;
+  return date.toISOString().slice(0, 10);
+}
+
+function monthKey(d: Date | string): string {
+  const date = typeof d === 'string' ? new Date(d) : d;
+  return date.toISOString().slice(0, 7);
+}
+
 /** Find messages and errors CSV files in a directory by header detection. */
 function findCSVFiles(dir: string): { messagesPath: string; errorsPath: string } {
   // Try well-known names first
@@ -133,6 +143,25 @@ function findCSVFiles(dir: string): { messagesPath: string; errorsPath: string }
   return { messagesPath, errorsPath };
 }
 
+// ── In-memory day-file helpers ──
+function addToDayMap<T>(map: Map<string, Record<string, T>>, key: string, id: string, record: T) {
+  if (!map.has(key)) map.set(key, {});
+  map.get(key)![id] = record;
+}
+
+// ── Parallel blob write with concurrency limit ──
+async function writeAllBlobs(blobs: Array<{ path: string; data: unknown }>, concurrency = 10) {
+  let i = 0;
+  async function next(): Promise<void> {
+    while (i < blobs.length) {
+      const blob = blobs[i++];
+      await writeJson(blob.path, blob.data);
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, blobs.length) }, () => next());
+  await Promise.all(workers);
+}
+
 export async function seed(csvDirOverride?: string) {
   const csvDir = csvDirOverride || process.argv[2] || path.resolve('C:\\Users\\Lenie\\Downloads\\team central data source');
   const { messagesPath, errorsPath } = findCSVFiles(csvDir);
@@ -145,19 +174,37 @@ export async function seed(csvDirOverride?: string) {
   console.log(`  Messages: ${messages.length} rows`);
   console.log(`  Errors: ${errors.length} rows`);
 
-  const store = getStore();
   await ensureContainer();
 
   console.log('Clearing existing data...');
   const deleted = await clearContainer();
   console.log(`  Deleted ${deleted} blobs`);
 
-  // -- Process message logs (main transactions) --
-  console.log('Inserting transactions from message logs...');
-  let txnCount = 0;
+  // ── In-memory data structures ──
+  const txDayMap = new Map<string, Record<string, Transaction>>();
+  const errDayMap = new Map<string, Record<string, IntegrationError>>();
+  const rerunDayMap = new Map<string, Record<string, Rerun>>();
+  const idxDayMap = new Map<string, Record<string, IndexingActivity>>();
+
+  // Index blobs
+  const txIdToDay: Record<string, string> = {};
+  const txExternalId: Record<string, string> = {};
+  const txSalesOrder: Record<string, string[]> = {};
+  const errorIdToDay: Record<string, string> = {};
+  const errorTxToIds: Record<string, string[]> = {};
+  const openErrorIds: string[] = [];
+  const rerunIdToDay: Record<string, string> = {};
+  const rerunTxToIds: Record<string, string[]> = {};
+
+  // Lookup maps
   const insertedByExternalId = new Map<string, Transaction>();
-  // In-memory index for the error-matching fallback below (nearest transaction by identifier).
   const byIdentifier = new Map<string, Transaction[]>();
+
+  const now = new Date().toISOString();
+
+  // -- Process message logs (main transactions) --
+  console.log('Building transactions in memory...');
+  let txnCount = 0;
 
   for (const msg of messages) {
     const system = msg['System'] || '';
@@ -175,9 +222,14 @@ export async function seed(csvDirOverride?: string) {
     const status = normalizeStatus(msgErrors);
     const externalId = `TC-${identifier}-${ts.getTime()}`;
 
-    if (insertedByExternalId.has(externalId)) continue; // dedupe, mirrors the old UNIQUE(external_id)
+    if (insertedByExternalId.has(externalId)) continue;
 
-    const tx = await store.insertTransaction({
+    const id = ulid();
+    const createdAt = ts.toISOString();
+    const key = dayKey(createdAt);
+
+    const tx: Transaction = {
+      id,
       external_id: externalId,
       team_central_id: null,
       batch_id: null,
@@ -192,8 +244,9 @@ export async function seed(csvDirOverride?: string) {
       external_order_id: null,
       original_status: null,
       normalized_status: status,
-      created_at: ts.toISOString(),
-      processed_at: status === 'SUCCESS' ? ts.toISOString() : null,
+      created_at: createdAt,
+      updated_at: now,
+      processed_at: status === 'SUCCESS' ? createdAt : null,
       last_attempt_at: null,
       last_error_at: null,
       processing_duration_ms: null,
@@ -202,7 +255,15 @@ export async function seed(csvDirOverride?: string) {
       is_rerun: false,
       raw_payload: null,
       raw_response: null,
-    });
+    };
+
+    addToDayMap(txDayMap, key, id, tx);
+    txIdToDay[id] = key;
+    txExternalId[externalId] = id;
+    if (tx.sales_order_id) {
+      if (!txSalesOrder[tx.sales_order_id]) txSalesOrder[tx.sales_order_id] = [];
+      txSalesOrder[tx.sales_order_id].push(id);
+    }
 
     insertedByExternalId.set(externalId, tx);
     const list = byIdentifier.get(identifier) || [];
@@ -210,10 +271,10 @@ export async function seed(csvDirOverride?: string) {
     byIdentifier.set(identifier, list);
     txnCount++;
   }
-  console.log(`  Inserted ${txnCount} transactions`);
+  console.log(`  Built ${txnCount} transactions`);
 
   // -- Process error logs --
-  console.log('Inserting errors from error logs...');
+  console.log('Building errors in memory...');
   let errCount = 0;
 
   for (const err of errors) {
@@ -228,20 +289,24 @@ export async function seed(csvDirOverride?: string) {
     const flowCode = endpointToFlow(endpointName, '');
     const category = classifyError(errorText);
 
-    const txExternalId = `TC-${identifier}-${ts.getTime()}`;
-    let tx = insertedByExternalId.get(txExternalId);
+    const txExternalIdKey = `TC-${identifier}-${ts.getTime()}`;
+    let tx = insertedByExternalId.get(txExternalIdKey);
 
     if (!tx) {
-      // Find the nearest transaction for this identifier (mirrors the old
-      // "closest by timestamp" SQL fallback, computed in-memory here).
       const candidates = byIdentifier.get(identifier) || [];
       if (candidates.length > 0) {
         tx = candidates.reduce((closest, cur) =>
           Math.abs(new Date(cur.created_at).getTime() - ts.getTime()) <
           Math.abs(new Date(closest.created_at).getTime() - ts.getTime()) ? cur : closest);
       } else {
+        // Create orphan transaction for this error
         const newExternalId = `TC-ERR-${identifier}-${ts.getTime()}`;
-        tx = await store.insertTransaction({
+        const orphanId = ulid();
+        const createdAt = ts.toISOString();
+        const key = dayKey(createdAt);
+
+        tx = {
+          id: orphanId,
           external_id: newExternalId,
           team_central_id: null,
           batch_id: null,
@@ -256,43 +321,67 @@ export async function seed(csvDirOverride?: string) {
           external_order_id: null,
           original_status: null,
           normalized_status: 'FAILED',
-          created_at: ts.toISOString(),
+          created_at: createdAt,
+          updated_at: now,
           processed_at: null,
           last_attempt_at: null,
-          last_error_at: ts.toISOString(),
+          last_error_at: createdAt,
           processing_duration_ms: null,
           retry_count: 0,
           rerun_count: 0,
           is_rerun: false,
           raw_payload: null,
           raw_response: null,
-        });
+        };
+
+        addToDayMap(txDayMap, key, orphanId, tx);
+        txIdToDay[orphanId] = key;
+        txExternalId[newExternalId] = orphanId;
+        if (tx.sales_order_id) {
+          if (!txSalesOrder[tx.sales_order_id]) txSalesOrder[tx.sales_order_id] = [];
+          txSalesOrder[tx.sales_order_id].push(orphanId);
+        }
+
         insertedByExternalId.set(newExternalId, tx);
         byIdentifier.set(identifier, [...(byIdentifier.get(identifier) || []), tx]);
       }
     }
 
-    // Errors older than 48h are resolved; recent ones stay open.
     const ageHours = (Date.now() - ts.getTime()) / 3600000;
     const resolvedAt = ageHours > 48 ? new Date(ts.getTime() + (2 + Math.random() * 10) * 3600000).toISOString() : null;
 
-    await store.insertError({
+    const blockingGroups = ['MAPPING', 'INDEXING'];
+    const errId = ulid();
+    const occurredAt = ts.toISOString();
+    const errKey = dayKey(occurredAt);
+
+    const integrationError: IntegrationError = {
+      id: errId,
       transaction_id: tx.id,
       error_code: category.code,
+      error_group: category.group,
+      category_label: getCategoryRules().find(c => c.code === category.code)?.label || null,
       error_message: errorText.slice(0, 255),
       raw_error: errorText,
-      occurred_at: ts.toISOString(),
+      occurred_at: occurredAt,
       resolved_at: resolvedAt,
       retry_count: 0,
+      is_blocking: blockingGroups.includes(category.group),
       is_current: !resolvedAt,
-    });
+      created_at: now,
+    };
+
+    addToDayMap(errDayMap, errKey, errId, integrationError);
+    errorIdToDay[errId] = errKey;
+    if (!errorTxToIds[tx.id]) errorTxToIds[tx.id] = [];
+    errorTxToIds[tx.id].push(errId);
+    if (!resolvedAt) openErrorIds.push(errId);
     errCount++;
   }
-  console.log(`  Inserted ${errCount} errors`);
+  console.log(`  Built ${errCount} errors`);
 
-  // -- Mark re-runs: transactions with the same identifier appearing multiple
-  //    times with a FAILED status (all but the earliest are marked as reruns) --
-  console.log('Marking re-runs and creating rerun records...');
+  // -- Mark re-runs --
+  console.log('Building rerun records...');
   let rerunCount = 0;
   for (const [, txns] of byIdentifier) {
     const failed = txns.filter(t => t.normalized_status === 'FAILED')
@@ -300,49 +389,94 @@ export async function seed(csvDirOverride?: string) {
     if (failed.length <= 1) continue;
 
     for (const t of failed.slice(1)) {
-      await store.updateTransaction(t.id, { is_rerun: true });
-      await store.insertRerun({
+      // Update the in-memory transaction
+      t.is_rerun = true;
+      // Also update in day map
+      const tKey = dayKey(t.created_at);
+      const dayRec = txDayMap.get(tKey);
+      if (dayRec && dayRec[t.id]) dayRec[t.id].is_rerun = true;
+
+      const rerunId = ulid();
+      const rerun: Rerun = {
+        id: rerunId,
         transaction_id: t.id,
         sales_order_id: t.sales_order_id,
         status: t.normalized_status,
         started_at: t.created_at,
         completed_at: t.normalized_status === 'SUCCESS' ? t.created_at : null,
-      });
+      };
+      const rKey = dayKey(rerun.started_at);
+      addToDayMap(rerunDayMap, rKey, rerunId, rerun);
+      rerunIdToDay[rerunId] = rKey;
+      if (!rerunTxToIds[t.id]) rerunTxToIds[t.id] = [];
+      rerunTxToIds[t.id].push(rerunId);
       rerunCount++;
     }
   }
-  console.log(`  Created ${rerunCount} rerun records`);
+  console.log(`  Built ${rerunCount} rerun records`);
 
-  // -- Seed indexing activity from IDX flow transactions --
-  console.log('Seeding indexing activity...');
+  // -- Build indexing activity --
+  console.log('Building indexing activity...');
   let idxCount = 0;
   for (const tx of insertedByExternalId.values()) {
     if (tx.flow_code !== 'IDX') continue;
-    await store.insertIndexingActivity({
+    const actId = ulid();
+    const activity: IndexingActivity = {
+      id: actId,
       index_type: tx.entity_type || 'Item',
       status: tx.normalized_status,
       created_at: tx.created_at,
-    });
+    };
+    addToDayMap(idxDayMap, dayKey(tx.created_at), actId, activity);
     idxCount++;
   }
-  console.log(`  Created ${idxCount} indexing records`);
+  console.log(`  Built ${idxCount} indexing records`);
 
-  // -- Seed a current heartbeat (only the latest is ever read by the dashboard) --
-  console.log('Seeding heartbeat...');
-  await store.recordHeartbeat({ heartbeat_at: new Date().toISOString(), system_code: 'TEAM_CENTRAL', status: 'OK', metadata: null });
+  // ── Write all blobs in parallel ──
+  console.log('Writing all blobs to storage...');
+  const blobs: Array<{ path: string; data: unknown }> = [];
 
-  // -- Seed a severity snapshot --
-  console.log('Seeding severity snapshot...');
-  await store.insertSeveritySnapshot({
-    evaluated_at: new Date().toISOString(),
-    overall_severity: 'SEV_0',
-    flow_severities: { S2N: 'SEV_0', N2S: 'SEV_0', IDX: 'SEV_0', NS: 'SEV_0' },
-    open_blocking_count: 0,
-    heartbeat_age_min: 0,
-    tx_last_60: null,
-    baseline_last_60: null,
-    details: null,
+  // Day-files
+  for (const [key, records] of txDayMap) blobs.push({ path: `transactions/${key}.json`, data: records });
+  for (const [key, records] of errDayMap) blobs.push({ path: `errors/${key}.json`, data: records });
+  for (const [key, records] of rerunDayMap) blobs.push({ path: `reruns/${key}.json`, data: records });
+  for (const [key, records] of idxDayMap) blobs.push({ path: `indexing/${key}.json`, data: records });
+
+  // Index blobs
+  blobs.push({ path: 'index/tx-id-to-day.json', data: txIdToDay });
+  blobs.push({ path: 'index/tx-external-id.json', data: txExternalId });
+  blobs.push({ path: 'index/tx-sales-order.json', data: txSalesOrder });
+  blobs.push({ path: 'index/error-id-to-day.json', data: errorIdToDay });
+  blobs.push({ path: 'index/error-tx-to-ids.json', data: errorTxToIds });
+  blobs.push({ path: 'index/open-error-ids.json', data: openErrorIds });
+  blobs.push({ path: 'index/rerun-id-to-day.json', data: rerunIdToDay });
+  blobs.push({ path: 'index/rerun-tx-to-ids.json', data: rerunTxToIds });
+  blobs.push({ path: 'index/pending-tx-ids.json', data: [] });
+  blobs.push({ path: 'index/unsent-notifications.json', data: [] });
+
+  // Heartbeat
+  blobs.push({ path: 'heartbeats/latest.json', data: { heartbeat_at: now, system_code: 'TEAM_CENTRAL', status: 'OK', metadata: null } });
+
+  // Severity snapshot
+  const snapId = ulid();
+  blobs.push({
+    path: `severity-snapshots/${monthKey(now)}.json`,
+    data: [{
+      id: snapId,
+      evaluated_at: now,
+      overall_severity: 'SEV_0',
+      flow_severities: { S2N: 'SEV_0', N2S: 'SEV_0', IDX: 'SEV_0', NS: 'SEV_0' },
+      open_blocking_count: 0,
+      heartbeat_age_min: 0,
+      tx_last_60: null,
+      baseline_last_60: null,
+      details: null,
+    }],
   });
+
+  console.log(`  ${blobs.length} blobs to write (${txDayMap.size} tx days, ${errDayMap.size} err days, ${rerunDayMap.size} rerun days, ${idxDayMap.size} idx days + indexes)`);
+  await writeAllBlobs(blobs, 15);
+  console.log('  All blobs written!');
 
   console.log('\nSeed complete!');
   console.log('Summary:', {
@@ -350,6 +484,7 @@ export async function seed(csvDirOverride?: string) {
     errors: errCount,
     reruns: rerunCount,
     indexing: idxCount,
+    blobs: blobs.length,
   });
 }
 
