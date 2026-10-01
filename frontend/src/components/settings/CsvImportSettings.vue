@@ -1,20 +1,21 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onUnmounted } from 'vue'
 
 const messagesFile = ref<File | null>(null)
 const errorsFile = ref<File | null>(null)
 
-type ImportState = 'idle' | 'importing' | 'success' | 'error'
+type ImportState = 'idle' | 'reading' | 'uploading' | 'importing' | 'success' | 'error'
 const state = ref<ImportState>('idle')
 const resultMessage = ref('')
+const progressLabel = ref('')
+let pollTimer: ReturnType<typeof setInterval> | null = null
 
 function onFileChange(type: 'messages' | 'errors', event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0] ?? null
   if (type === 'messages') messagesFile.value = file
   else errorsFile.value = file
-  // Reset state when user picks new files
-  if (state.value !== 'idle') {
+  if (state.value === 'success' || state.value === 'error') {
     state.value = 'idle'
     resultMessage.value = ''
   }
@@ -26,7 +27,7 @@ function onDrop(type: 'messages' | 'errors', event: DragEvent) {
   if (file && file.name.endsWith('.csv')) {
     if (type === 'messages') messagesFile.value = file
     else errorsFile.value = file
-    if (state.value !== 'idle') {
+    if (state.value === 'success' || state.value === 'error') {
       state.value = 'idle'
       resultMessage.value = ''
     }
@@ -46,21 +47,49 @@ function readFileAsText(file: File): Promise<string> {
   })
 }
 
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+function startPolling() {
+  stopPolling()
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch('/api/csv-import/status')
+      const data = await res.json()
+      if (!data.running) {
+        stopPolling()
+        if (data.result) {
+          state.value = 'success'
+          resultMessage.value = data.result
+        } else if (data.error) {
+          state.value = 'error'
+          resultMessage.value = data.error
+        }
+      }
+    } catch {
+      // keep polling
+    }
+  }, 2000)
+}
+
 async function doImport() {
   if (!messagesFile.value || !errorsFile.value) return
 
-  state.value = 'importing'
+  state.value = 'reading'
+  progressLabel.value = 'Reading files...'
   resultMessage.value = ''
 
   try {
     const body: { messages?: string; errors?: string } = {}
+    body.messages = await readFileAsText(messagesFile.value)
+    body.errors = await readFileAsText(errorsFile.value)
 
-    if (messagesFile.value) {
-      body.messages = await readFileAsText(messagesFile.value)
-    }
-    if (errorsFile.value) {
-      body.errors = await readFileAsText(errorsFile.value)
-    }
+    state.value = 'uploading'
+    progressLabel.value = 'Uploading to server...'
 
     const res = await fetch('/api/csv-import', {
       method: 'POST',
@@ -70,7 +99,11 @@ async function doImport() {
 
     const data = await res.json()
 
-    if (res.ok && data.status === 'ok') {
+    if (res.ok && (data.status === 'started' || data.status === 'already_running')) {
+      state.value = 'importing'
+      progressLabel.value = 'Importing data — this may take a few minutes...'
+      startPolling()
+    } else if (res.ok && data.status === 'ok') {
       state.value = 'success'
       resultMessage.value = data.message || 'Import completed successfully.'
     } else {
@@ -87,6 +120,10 @@ function clearFile(type: 'messages' | 'errors') {
   if (type === 'messages') messagesFile.value = null
   else errorsFile.value = null
 }
+
+const isWorking = () => state.value === 'reading' || state.value === 'uploading' || state.value === 'importing'
+
+onUnmounted(() => stopPolling())
 </script>
 
 <template>
@@ -146,13 +183,21 @@ function clearFile(type: 'messages' | 'errors') {
       </div>
     </div>
 
+    <!-- Progress bar -->
+    <div v-if="isWorking()" class="progress-section">
+      <div class="progress-bar-track">
+        <div class="progress-bar-fill" :class="{ indeterminate: state === 'importing' }"></div>
+      </div>
+      <span class="progress-label">{{ progressLabel }}</span>
+    </div>
+
     <div class="settings-actions">
       <button
         class="btn-primary"
         @click="doImport"
-        :disabled="state === 'importing' || !messagesFile || !errorsFile"
+        :disabled="isWorking() || !messagesFile || !errorsFile"
       >
-        {{ state === 'importing' ? 'Importing...' : 'Import' }}
+        {{ isWorking() ? 'Importing...' : 'Import' }}
       </button>
 
       <span v-if="state === 'success'" class="save-ok">{{ resultMessage }}</span>
@@ -209,6 +254,47 @@ function clearFile(type: 'messages' | 'errors') {
 .import-error {
   font-size: 13px;
   color: var(--crit-ink, var(--crit));
+  font-weight: 500;
+}
+
+.progress-section {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.progress-bar-track {
+  width: 100%;
+  height: 6px;
+  background: var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  width: 100%;
+  transform-origin: left;
+  animation: none;
+}
+
+.progress-bar-fill.indeterminate {
+  width: 40%;
+  animation: slide 1.5s ease-in-out infinite;
+}
+
+@keyframes slide {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(150%); }
+  100% { transform: translateX(-100%); }
+}
+
+.progress-label {
+  font-size: 12px;
+  color: var(--ink-3);
   font-weight: 500;
 }
 </style>
