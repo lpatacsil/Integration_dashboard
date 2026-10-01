@@ -341,8 +341,15 @@ export async function evaluate(): Promise<EvaluationResult> {
       result.notifications.push({ type: 'OPENED', incidentKey: key, subject, recipients: esc.notify, cc: esc.cc, sent: false });
 
       if (isTeamsEnabled()) {
-        sendTeamsNotification({ type: 'OPENED', incidentKey: key, severity: overallSeverity, subject, body, recipients: esc.notify, cc: esc.cc })
-          .catch(err => console.error('Teams notify error (OPENED):', err));
+        sendTeamsNotification({
+          type: 'OPENED', incidentKey: key, severity: overallSeverity, subject, body,
+          recipients: esc.notify, cc: esc.cc,
+          flowName, categoryCode: incident.errorCode, categoryLabel: catRule?.label || incident.errorCode,
+          count: incident.count, entityRefs: incident.entityRefs.slice(0, 10),
+          soNumbers: dedupe(incident.soNumbers), draftIds: dedupe(incident.draftIds),
+          errorMessages: incident.errorMessages.slice(0, 10), playbookStep: ctx.playbookStep,
+          openedAt: ctx.openedAt, age: ctx.age, rule: ctx.rule, renotifyMinutes: esc.renotifyMinutes,
+        }).catch(err => console.error('Teams notify error (OPENED):', err));
       }
       if (isEmailEnabled()) {
         sendAlertEmail(esc.notify, esc.cc, subject, body)
@@ -386,8 +393,15 @@ export async function evaluate(): Promise<EvaluationResult> {
         result.notifications.push({ type: 'LEVEL_CHANGE', incidentKey: key, subject, recipients: esc.notify, cc: esc.cc, sent: false });
 
         if (isTeamsEnabled()) {
-          sendTeamsNotification({ type: 'LEVEL_CHANGE', incidentKey: key, severity: overallSeverity, subject, body, recipients: esc.notify, cc: esc.cc })
-            .catch(err => console.error('Teams notify error (LEVEL_CHANGE):', err));
+          sendTeamsNotification({
+            type: 'LEVEL_CHANGE', incidentKey: key, severity: overallSeverity, subject, body,
+            recipients: esc.notify, cc: esc.cc,
+            flowName, categoryCode: incident.errorCode, categoryLabel: catRule?.label || incident.errorCode,
+            count: incident.count, entityRefs: incident.entityRefs.slice(0, 10),
+            soNumbers: dedupe(incident.soNumbers), draftIds: dedupe(incident.draftIds),
+            errorMessages: incident.errorMessages.slice(0, 10), playbookStep: ctx.playbookStep,
+            openedAt: ctx.openedAt, age: ctx.age, rule: ctx.rule, renotifyMinutes: esc.renotifyMinutes,
+          }).catch(err => console.error('Teams notify error (LEVEL_CHANGE):', err));
         }
         if (isEmailEnabled()) {
           sendAlertEmail(esc.notify, esc.cc, subject, body)
@@ -417,8 +431,15 @@ export async function evaluate(): Promise<EvaluationResult> {
         result.notifications.push({ type: 'RENOTIFY', incidentKey: key, subject, recipients: esc.notify, cc: esc.cc, sent: false });
 
         if (isTeamsEnabled()) {
-          sendTeamsNotification({ type: 'RENOTIFY', incidentKey: key, severity: overallSeverity, subject, body, recipients: esc.notify, cc: esc.cc })
-            .catch(err => console.error('Teams notify error (RENOTIFY):', err));
+          sendTeamsNotification({
+            type: 'RENOTIFY', incidentKey: key, severity: overallSeverity, subject, body,
+            recipients: esc.notify, cc: esc.cc,
+            flowName, categoryCode: incident.errorCode, categoryLabel: catRule?.label || incident.errorCode,
+            count: incident.count, entityRefs: incident.entityRefs.slice(0, 10),
+            soNumbers: dedupe(incident.soNumbers), draftIds: dedupe(incident.draftIds),
+            errorMessages: incident.errorMessages.slice(0, 10), playbookStep: ctx.playbookStep,
+            openedAt: ctx.openedAt, age: ctx.age, rule: ctx.rule, renotifyMinutes: esc.renotifyMinutes,
+          }).catch(err => console.error('Teams notify error (RENOTIFY):', err));
         }
         if (isEmailEnabled()) {
           sendAlertEmail(esc.notify, esc.cc, subject, body)
@@ -447,8 +468,16 @@ export async function evaluate(): Promise<EvaluationResult> {
     result.notifications.push({ type: 'RESOLVED', incidentKey: key, subject, recipients: existing.notify, cc: existing.cc, sent: false });
 
     if (isTeamsEnabled()) {
-      sendTeamsNotification({ type: 'RESOLVED', incidentKey: key, severity: 0, subject, body, recipients: existing.notify, cc: existing.cc })
-        .catch(err => console.error('Teams notify error (RESOLVED):', err));
+      sendTeamsNotification({
+        type: 'RESOLVED', incidentKey: key, severity: 0, subject, body,
+        recipients: existing.notify, cc: existing.cc,
+        flowName: FLOWS[existing.flow_code]?.name || existing.flow_code,
+        categoryCode: existing.error_code || 'UNKNOWN',
+        categoryLabel: CATEGORY_RULES.find(c => c.code === existing.error_code)?.label || existing.error_code || 'Unknown',
+        count: 0, entityRefs: [], soNumbers: [], draftIds: [], errorMessages: [],
+        playbookStep: '', openedAt: existing.opened_at, age: '',
+        rule: '', renotifyMinutes: 0,
+      }).catch(err => console.error('Teams notify error (RESOLVED):', err));
     }
     if (isEmailEnabled()) {
       sendAlertEmail(existing.notify, existing.cc, subject, body)
