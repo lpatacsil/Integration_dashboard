@@ -271,6 +271,61 @@ export async function fetchNSInternalErrors(startDate?: string, endDate?: string
 }
 
 /**
+ * Fetch sales orders directly from NetSuite for a date range.
+ * Returns SO Number, Memo, Customer, Total Amount, Location.
+ */
+export async function fetchSalesOrders(startDate: string, endDate: string): Promise<{
+  orders: Record<string, any>[];
+  source: string;
+}> {
+  if (!isConfigured()) {
+    return { orders: [], source: 'not_configured' };
+  }
+
+  try {
+    // Convert YYYY-MM-DD to M/D/YYYY for NetSuite SuiteQL
+    const sd = new Date(startDate);
+    const sdStr = `${sd.getUTCMonth() + 1}/${sd.getUTCDate()}/${sd.getUTCFullYear()}`;
+    const ed = new Date(endDate);
+    const edStr = `${ed.getUTCMonth() + 1}/${ed.getUTCDate()}/${ed.getUTCFullYear()}`;
+
+    const query = `
+      SELECT
+        t.tranid AS so_number,
+        t.memo,
+        c.companyname AS customer,
+        t.foreigntotal AS total_amount,
+        BUILTIN.DF(t.location) AS location,
+        t.trandate,
+        t.custbody_budget_hours AS shopify_so
+      FROM transaction t
+      LEFT JOIN customer c ON c.id = t.entity
+      WHERE t.type = 'SalesOrd'
+        AND t.trandate >= '${sdStr}'
+        AND t.trandate <= '${edStr}'
+      ORDER BY t.trandate DESC, t.tranid DESC
+    `;
+
+    const allItems: Record<string, any>[] = [];
+    let offset = 0;
+    const limit = 200;
+    let hasMore = true;
+
+    while (hasMore && offset < 5000) {
+      const result = await suiteQL(query, limit, offset);
+      allItems.push(...result.items);
+      hasMore = result.hasMore;
+      offset += limit;
+    }
+
+    return { orders: allItems, source: 'netsuite_direct' };
+  } catch (err: any) {
+    console.error('fetchSalesOrders error:', err.message);
+    return { orders: [], source: `error: ${err.message}` };
+  }
+}
+
+/**
  * Return current sync status.
  */
 export async function getSyncStatus(): Promise<{

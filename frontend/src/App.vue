@@ -16,6 +16,7 @@ import SideBar from './components/SideBar.vue'
 import OverviewPanel from './components/OverviewPanel.vue'
 import FlowPanel from './components/FlowPanel.vue'
 import NsPanel from './components/NsPanel.vue'
+import ReconPanel from './components/ReconPanel.vue'
 import AlertsSettings from './components/settings/AlertsSettings.vue'
 import RulesSettings from './components/settings/RulesSettings.vue'
 import ChannelsSettings from './components/settings/ChannelsSettings.vue'
@@ -217,6 +218,8 @@ onMounted(async () => {
       :category-rules="categoryRules"
       :error="flowErrors.NS"
     />
+
+    <ReconPanel v-if="activeView === 'recon'" />
 
     <!-- Settings panels -->
     <AlertsSettings

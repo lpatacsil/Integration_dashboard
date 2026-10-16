@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import dns from 'dns';
+dns.setDefaultResultOrder('ipv4first');
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
@@ -14,11 +16,14 @@ import rerunsRouter from './routes/reruns';
 import alertsRouter from './routes/alerts';
 import rulesRouter from './routes/rules';
 import netsuiteRouter from './routes/netsuite';
+import shopifyRouter from './routes/shopify';
+import reconciliationRouter from './routes/reconciliation';
 import alertEngineRouter from './routes/alert-engine';
 import settingsRouter from './routes/settings';
 import csvImportRouter from './routes/csv-import';
 import { loadSettings } from './services/settings-store';
 import { seed } from './seed';
+import { startReconSync } from './services/recon-sync';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || process.env.API_PORT || '3001', 10);
@@ -36,6 +41,8 @@ app.use('/api/reruns', rerunsRouter);
 app.use('/api/alerts', alertsRouter);
 app.use('/api/rules', rulesRouter);
 app.use('/api/netsuite', netsuiteRouter);
+app.use('/api/shopify', shopifyRouter);
+app.use('/api/reconciliation', reconciliationRouter);
 app.use('/api/alert-engine', alertEngineRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/csv-import', express.json({ limit: '50mb' }), csvImportRouter);
@@ -70,6 +77,7 @@ if (fs.existsSync(publicDir)) {
 loadSettings().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`API listening on http://0.0.0.0:${PORT}`);
+    startReconSync();
   });
 }).catch(err => {
   console.error('Failed to load settings:', err);

@@ -10,6 +10,16 @@ export async function fetchJSON<T>(path: string, params: Record<string, string |
   return res.json()
 }
 
+export async function postJSON<T>(path: string, body: unknown = {}): Promise<T> {
+  const res = await fetch(BASE + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
 export async function putJSON<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(BASE + path, {
     method: 'PUT',

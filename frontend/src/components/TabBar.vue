@@ -25,6 +25,7 @@ const tabs: TabDef[] = [
   { key: 'n2s', label: 'NetSuite \u2192 Shopify', flowCode: 'N2S' },
   { key: 'idx', label: 'Indexing', flowCode: 'IDX' },
   { key: 'nsint', label: 'NetSuite internal log', flowCode: 'NS' },
+  { key: 'recon', label: 'NS ↔ Shopify Recon' },
 ]
 
 function getCount(tab: TabDef): number | null {

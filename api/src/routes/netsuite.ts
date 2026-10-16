@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { testConnection } from '../services/netsuite-client';
-import { syncRecentOrders, fetchOrderDetail, getSyncStatus, fetchNSInternalErrors } from '../services/netsuite-sync';
+import { syncRecentOrders, fetchOrderDetail, getSyncStatus, fetchNSInternalErrors, fetchSalesOrders } from '../services/netsuite-sync';
 
 const router = Router();
 
@@ -65,5 +65,23 @@ router.get('/internal-errors', async (req: Request, res: Response) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// GET /api/netsuite/sales-orders — pull SO records directly from NetSuite
+router.get('/sales-orders', async (req: Request, res: Response) => {
+  try {
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    if (!startDate || !endDate) {
+      res.status(400).json({ error: 'startDate and endDate query params are required' });
+      return;
+    }
+    const result = await fetchSalesOrders(startDate, endDate);
+    res.json(result);
+  } catch (err: any) {
+    console.error('netsuite/sales-orders error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 export default router;

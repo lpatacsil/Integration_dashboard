@@ -253,6 +253,120 @@ export interface SettingsData {
   notificationChannels: NotificationChannels
 }
 
+/* ── /api/netsuite/sales-orders ── */
+export interface NetsuiteSalesOrder {
+  so_number: string
+  memo: string | null
+  customer: string | null
+  total_amount: number | null
+  location: string | null
+  trandate: string | null
+}
+
+export interface SalesOrdersResponse {
+  orders: NetsuiteSalesOrder[]
+  source: string
+}
+
+/* ── /api/reconciliation ── */
+export interface ReconRecord {
+  netsuite_so: string | null
+  netsuite_memo: string | null
+  netsuite_customer: string | null
+  netsuite_amount: string | null
+  netsuite_date: string | null
+  netsuite_location: string | null
+  netsuite_shopify_so: string | null
+  shopify_draft: string | null
+  shopify_customer: string | null
+  shopify_amount: string | null
+  shopify_order: string | null
+  shopify_created: string | null
+  status: 'matched' | 'missing_in_netsuite' | 'missing_in_shopify' | 'no_memo'
+}
+
+export interface ReconSummary {
+  total: number
+  matched: number
+  missing_in_netsuite: number
+  missing_in_shopify: number
+  no_memo: number
+  netsuite_sos: number
+  shopify_drafts: number
+}
+
+export interface ReconciliationResponse {
+  records: ReconRecord[]
+  summary: ReconSummary
+}
+
+/* ── /api/reconciliation/sync-status ── */
+export interface UnmatchedDraft {
+  draft_number: string
+  shopify_customer: string | null
+  shopify_amount: string | null
+  shopify_created: string | null
+  first_seen: string
+  age_minutes: number
+  notified_at: string | null
+}
+
+export interface ResolvedDraft {
+  draft_number: string
+  shopify_customer: string | null
+  shopify_amount: string | null
+  shopify_created: string | null
+  netsuite_so: string | null
+  first_seen: string
+  resolved_at: string
+  time_to_resolve_minutes: number
+  was_alerted: boolean
+}
+
+export interface ReconSyncStatus {
+  last_sync_at: string | null
+  last_sync_duration_ms: number
+  sync_count: number
+  unmatched_drafts: UnmatchedDraft[]
+  resolved_drafts: ResolvedDraft[]
+  matched_count: number
+  netsuite_sos: number
+  shopify_drafts: number
+  error: string | null
+  last_notification_at: string | null
+  notifications_sent: number
+}
+
+/* ── /api/shopify/orders ── */
+export interface ShopifyOrder {
+  order_number: string
+  created_at: string
+  customer: string | null
+  total_price: string | null
+  financial_status: string | null
+  fulfillment_status: string | null
+  note: string | null
+}
+
+export interface ShopifyOrdersResponse {
+  orders: ShopifyOrder[]
+  source: string
+}
+
+export interface ShopifyDraftOrder {
+  draft_number: string
+  created_at: string
+  customer: string | null
+  total_price: string | null
+  status: string | null
+  note: string | null
+}
+
+export interface ShopifyDraftOrdersResponse {
+  draft_orders: ShopifyDraftOrder[]
+  source: string
+}
+
 /* ── Helpers ── */
 export const SEV_NAMES = ['Healthy', 'Sev 1', 'Sev 2', 'Sev 3', 'Sev 4'] as const
 
