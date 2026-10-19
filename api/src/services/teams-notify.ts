@@ -63,18 +63,18 @@ export interface TeamsNotification {
 }
 
 /**
- * Returns true if the Teams webhook is configured.
+ * Returns true if Teams is switched on in Settings and a webhook is configured.
  */
 export function isTeamsEnabled(): boolean {
-  return getWebhookUrl().length > 0;
+  return getNotificationChannels().teams.enabled && getWebhookUrl().length > 0;
 }
 
 /**
  * Send an alert notification to the Teams channel as an Adaptive Card.
  */
 export async function sendTeamsNotification(notification: TeamsNotification): Promise<boolean> {
+  if (!isTeamsEnabled()) return false;
   const webhookUrl = getWebhookUrl();
-  if (!webhookUrl) return false;
 
   const card = buildAdaptiveCard(notification);
 
