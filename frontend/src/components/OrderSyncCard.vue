@@ -26,20 +26,24 @@ const pillCls = computed(() => {
       </div>
       <span class="pill" :class="pillCls">{{ pillLabel }}</span>
     </div>
-    <div class="stages">
-      <div title="Shopify draft orders created in the selected range">Drafts<b>{{ stats?.drafts ?? 0 }}</b></div>
-      <div title="Drafts with a NetSuite sales order (memo = draft #)">SO created<b>{{ stats?.so_created ?? 0 }}</b></div>
-      <div title="Sales orders with Integration Ready checked">Ready<b>{{ stats?.ready ?? 0 }}</b></div>
-      <div title="Ready sales orders whose Shopify SO # matches an order in Shopify">Resolved<b class="resolved">{{ stats?.resolved ?? 0 }}</b></div>
+    <div class="phase">
+      <div class="phase-title">Phase 1 · Draft order → Sales order <span>Shopify → NetSuite</span></div>
+      <div class="stages">
+        <div title="Shopify draft orders created in the selected range">Drafts<b>{{ stats?.drafts ?? 0 }}</b></div>
+        <div title="Drafts with a NetSuite sales order (memo = draft #)">SO created<b class="resolved">{{ stats?.so_created ?? 0 }}</b></div>
+        <div title="Drafts with no NetSuite sales order after 15 minutes">Errors<b :class="{ err: stats?.errors_no_so }">{{ stats?.errors_no_so ?? 0 }}</b></div>
+      </div>
+    </div>
+    <div class="phase">
+      <div class="phase-title">Phase 2 · Ready for billing → Shopify order <span>NetSuite → Shopify</span></div>
+      <div class="stages">
+        <div title="Sales orders with Integration Ready checked: customer will be billed / invoiced">Ready<b>{{ stats?.ready ?? 0 }}</b></div>
+        <div title="Ready sales orders whose Shopify SO # matches an order in Shopify">Ordered<b class="resolved">{{ stats?.resolved ?? 0 }}</b></div>
+        <div title="Ready sales orders whose Shopify SO # is missing or not in Shopify">Errors<b :class="{ err: stats?.errors_no_order }">{{ stats?.errors_no_order ?? 0 }}</b></div>
+      </div>
     </div>
     <div class="tally">
-      <span title="No NetSuite SO after 15 minutes, or ready SO whose Shopify SO # is missing / not in Shopify">
-        Errors <b :class="{ err: stats?.errors }">{{ stats?.errors ?? 0 }}</b>
-        <template v-if="stats?.errors">
-          ({{ stats.errors_no_so }} no SO · {{ stats.errors_no_order }} no Shopify order)
-        </template>
-      </span>
-      <span title="SO not ready yet, or draft created in the last 15 minutes">Pending <b>{{ stats?.pending ?? 0 }}</b></span>
+      <span title="SO not marked Integration Ready yet, or draft created in the last 15 minutes">Pending <b>{{ stats?.pending ?? 0 }}</b></span>
     </div>
   </div>
 </template>

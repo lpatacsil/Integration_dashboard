@@ -118,7 +118,11 @@ select,input[type=date]{font:inherit;font-size:13px;padding:6px 8px;border:1px s
 .flow .nums b{display:block;font-size:20px;font-weight:600;color:var(--ink);letter-spacing:-.01em;font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:0}
 .flow .nums b.err{color:var(--crit-ink)}
 .flow.order{grid-column:span 2}
-.flow .stages{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.flow .phase{display:flex;flex-direction:column;gap:6px}
+.flow .phase-title{font-size:12px;font-weight:600;color:var(--ink-2)}
+.flow .phase-title span{font-family:var(--mono);font-size:11px;font-weight:400;color:var(--ink-3);margin-left:6px}
+.flow .stages{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.flow .stages b.err{color:var(--crit-ink)}
 .flow .stages div{font-size:11px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em}
 .flow .stages b{display:block;font-size:20px;font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums;letter-spacing:0}
 .flow .stages b.resolved{color:var(--good-ink)}
