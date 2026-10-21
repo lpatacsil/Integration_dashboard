@@ -2,10 +2,9 @@ import { suiteQL } from './netsuite-client';
 import { isConfigured as netsuiteConfigured } from './netsuite-auth';
 import { lookupDraftsByName, isConfigured as shopifyConfigured } from './shopify-client';
 
-// NetSuite "BLP Issue" cases (customrecord_issue_log, rectype 2049) linked to the order flows:
-//   S2N: the case's Invoice / Order # is an SO created from a Shopify draft (memo #D…),
-//        or the case detail mentions a draft number that exists in Shopify
-//   N2S: the case's SO is marked integration ready
+// NetSuite "BLP Issue" cases (customrecord_issue_log, rectype 2049) linked to Shopify drafts:
+// the case's Invoice / Order # is an SO created from a draft (memo #D…),
+// or the case detail mentions a draft number that exists in Shopify.
 // Filtered by the case's created date. Cached briefly since the flow tabs auto-refresh.
 export interface RelatedCase {
   id: string;
@@ -24,11 +23,9 @@ export interface RelatedCase {
   integration_reason: string | null;   // why it looks like an integration case; null = other order work
 }
 
-export interface RelatedCases { S2N: RelatedCase[]; N2S: RelatedCase[] }
-
 const CASE_URL = (id: string) => `https://7106084.app.netsuite.com/app/common/custom/custrecordentry.nl?rectype=2049&id=${id}`;
 const CACHE_MS = 2 * 60 * 1000;
-const cache = new Map<string, { at: number; value: RelatedCases }>();
+const cache = new Map<string, { at: number; value: RelatedCase[] }>();
 const SO_NUMBER = /^SO\d+$/i;
 // Matches "#D28627", "D28627" and "Draft order # D28627"
 const DRAFT_MENTION = /#?\s*\bD\s?(\d{5,6})\b/gi;
@@ -67,7 +64,7 @@ async function suiteQLAll(query: string): Promise<Record<string, any>[]> {
   return rows;
 }
 
-export async function getRelatedCases(startDate: string, endDate: string): Promise<RelatedCases | null> {
+export async function getRelatedCases(startDate: string, endDate: string): Promise<RelatedCase[] | null> {
   if (!netsuiteConfigured()) return null;
   const key = `${startDate}|${endDate}`;
   const cached = cache.get(key);
@@ -84,16 +81,16 @@ export async function getRelatedCases(startDate: string, endDate: string): Promi
     ORDER BY id DESC
   `);
 
-  // Look up the SOs the cases point at: was it created from a draft, and is it integration ready?
+  // Look up the SOs the cases point at: were they created from a draft?
   const soNumbers = [...new Set(cases.map(c => String(c.invoice || '').trim().toUpperCase()).filter(n => SO_NUMBER.test(n)))];
-  const soInfo = new Map<string, { memo: string | null; ready: boolean }>();
+  const soInfo = new Map<string, { memo: string | null }>();
   for (let i = 0; i < soNumbers.length; i += 200) {
     const list = soNumbers.slice(i, i + 200).map(n => `'${n}'`).join(',');
     const rows = await suiteQLAll(`
-      SELECT tranid, memo, custbody_integration_ready AS integration_ready
+      SELECT tranid, memo
       FROM transaction WHERE type = 'SalesOrd' AND tranid IN (${list})
     `);
-    for (const r of rows) soInfo.set(String(r.tranid).toUpperCase(), { memo: r.memo?.trim() || null, ready: r.integration_ready === 'T' });
+    for (const r of rows) soInfo.set(String(r.tranid).toUpperCase(), { memo: r.memo?.trim() || null });
   }
 
   // Draft numbers mentioned in case details only count if the draft really exists in Shopify
@@ -105,7 +102,7 @@ export async function getRelatedCases(startDate: string, endDate: string): Promi
   const mentioned = [...new Set(parsed.flatMap(p => p.mentions))];
   const knownDrafts = shopifyConfigured() ? await lookupDraftsByName(mentioned) : new Map();
 
-  const result: RelatedCases = { S2N: [], N2S: [] };
+  const result: RelatedCase[] = [];
   for (const { c, text, mentions } of parsed) {
     const so = String(c.invoice || '').trim().toUpperCase();
     const info = soInfo.get(so);
@@ -128,8 +125,7 @@ export async function getRelatedCases(startDate: string, endDate: string): Promi
       url: CASE_URL(String(c.id)),
       integration_reason: integrationReason(text),
     };
-    if (draft) result.S2N.push(row);
-    if (info?.ready) result.N2S.push(row);
+    if (draft) result.push(row);
   }
 
   cache.set(key, { at: Date.now(), value: result });

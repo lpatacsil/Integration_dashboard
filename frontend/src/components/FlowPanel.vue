@@ -157,7 +157,7 @@ function idxFailedThreshold(): number {
         <div class="card">
           <h3>
             Integration cases
-            <span class="hint">not porting / not syncing / item mapping · {{ flowCode === 'N2S' ? 'integration-ready sales orders' : 'orders from Shopify drafts' }} · created in range</span>
+            <span class="hint">not porting / not syncing / item mapping · orders from Shopify drafts · created in range</span>
           </h3>
           <div v-if="!integrationCases.length" class="empty">No integration cases raised for these orders in this range.</div>
           <RelatedCasesTable v-else :cases="integrationCases" show-reason />

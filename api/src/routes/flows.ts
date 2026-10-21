@@ -175,10 +175,9 @@ router.get('/:code', async (req: Request, res: Response) => {
       indexingNeeds = { ...needsSummary, openOrders };
     }
 
-    // NetSuite cases raised against this flow's orders, in range
-    const relatedCases = (flowCode === 'S2N' || flowCode === 'N2S')
+    // NetSuite cases raised against Shopify drafts, in range (Shopify → NetSuite tab only)
+    const relatedCases = flowCode === 'S2N'
       ? await getRelatedCases(startDate, endDate)
-        .then(c => c?.[flowCode] ?? null)
         .catch(err => {
           console.error('flows related cases error:', err.message);
           return null;
