@@ -1,6 +1,6 @@
 export const FLOWS: Record<string, { name: string; dir: string }> = {
-  S2N: { name: 'Shopify → NetSuite', dir: 'Orders · customers · payments' },
-  N2S: { name: 'NetSuite → Shopify', dir: 'Draft orders · fulfillments · inventory' },
+  S2N: { name: 'Shopify → NetSuite', dir: 'Draft orders to sales orders' },
+  N2S: { name: 'NetSuite → Shopify', dir: 'Orders to billed' },
   IDX: { name: 'Indexing', dir: 'Customer · item · ship-to · location' },
   NS:  { name: 'NetSuite internal', dir: 'Vertex · inventory · validation' },
 };
