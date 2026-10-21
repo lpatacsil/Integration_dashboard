@@ -21,6 +21,11 @@ const indexTypeLabel: Record<string, string> = {
   'MAP-LOC': 'Location / store',
 }
 
+const pendingDetail: Record<string, string> = {
+  S2N: 'drafts under 15 minutes old',
+  N2S: 'sales orders not integration ready yet',
+}
+
 function errorThreshold(): number | undefined {
   return props.rules?.thresholds?.[`${props.flowCode}.errors`]
 }
@@ -53,7 +58,7 @@ function idxFailedThreshold(): number {
           :detail="errorThreshold() ? `threshold ${errorThreshold()}/day` : ''"
           :value-class="errorThreshold() && (data.kpi.errored || 0) > errorThreshold()! ? 'bad' : ''"
         />
-        <KpiCard label="Pending" :value="data.kpi.pending || 0" detail="awaiting target system" />
+        <KpiCard label="Pending" :value="data.kpi.pending || 0" :detail="pendingDetail[flowCode] || 'awaiting target system'" />
         <KpiCard
           v-if="flowCode === 'IDX'"
           label="Index failures"

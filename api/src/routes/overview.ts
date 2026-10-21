@@ -7,9 +7,7 @@ import {
   toOpenBlockingErrors, indexById, groupByFlow, computeFlowCardStats,
   computeTxLast60, computeBaselineLast60, computeErrorSparkline, computeFlowErrorResolution,
 } from '../store/aggregate';
-import { fetchDraftsByDateRange, isConfigured as shopifyConfigured } from '../services/shopify-client';
-import { fetchSalesOrders } from '../services/netsuite-sync';
-import { isConfigured as netsuiteConfigured } from '../services/netsuite-auth';
+import { getOrderSyncStats } from '../services/order-sync';
 
 const router = Router();
 
@@ -20,76 +18,6 @@ function parseDates(req: Request): { startDate: string; endDate: string } {
     startDate: (req.query.startDate as string) || todayStr,
     endDate: (req.query.endDate as string) || todayStr,
   };
-}
-
-// Order flow stats — follow each Shopify draft created in the range through both legs:
-//   draft → NetSuite SO (SO memo = draft #) → SO marked integration ready → Shopify SO # matches a Shopify order.
-// Ready + matching Shopify SO # = resolved; no SO, or ready without a Shopify order = error;
-// otherwise (not ready yet, or too new to judge) = pending. Cached briefly since the overview auto-refreshes.
-export interface OrderSyncStats {
-  drafts: number;
-  so_created: number;
-  ready: number;
-  resolved: number;
-  errors: number;
-  errors_no_so: number;
-  errors_no_order: number;
-  pending: number;
-}
-
-const ORDER_SYNC_CACHE_MS = 2 * 60 * 1000;
-const ORDER_SYNC_GRACE_MINUTES = 15;   // same window the recon alerts wait before flagging a draft
-const SO_LOOKAHEAD_DAYS = 7;           // an SO can be created a few days after its draft
-const orderSyncCache = new Map<string, { at: number; value: OrderSyncStats }>();
-const DRAFT_MEMO = /^#D\d+$/;
-
-async function getOrderSyncStats(startDate: string, endDate: string): Promise<OrderSyncStats | null> {
-  if (!shopifyConfigured() || !netsuiteConfigured()) return null;
-  const key = `${startDate}|${endDate}`;
-  const cached = orderSyncCache.get(key);
-  if (cached && Date.now() - cached.at < ORDER_SYNC_CACHE_MS) return cached.value;
-
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const nsEnd = new Date(endDate + 'T00:00:00Z');
-  nsEnd.setUTCDate(nsEnd.getUTCDate() + SO_LOOKAHEAD_DAYS);
-  const nsEndStr = nsEnd.toISOString().slice(0, 10) < todayStr ? nsEnd.toISOString().slice(0, 10) : todayStr;
-
-  const [drafts, netsuiteSOs] = await Promise.all([
-    fetchDraftsByDateRange(startDate, endDate),
-    fetchSalesOrders(startDate, nsEndStr),
-  ]);
-  const soByMemo = new Map<string, Record<string, any>>();
-  for (const so of netsuiteSOs.orders) {
-    const memo = so.memo?.trim();
-    if (memo && DRAFT_MEMO.test(memo)) soByMemo.set(memo, so);
-  }
-
-  const stats: OrderSyncStats = {
-    drafts: drafts.size, so_created: 0, ready: 0, resolved: 0,
-    errors: 0, errors_no_so: 0, errors_no_order: 0, pending: 0,
-  };
-  const now = Date.now();
-  for (const [name, draft] of drafts) {
-    const ageMin = (now - new Date(draft.created_at).getTime()) / 60000;
-    const so = soByMemo.get(name);
-    if (!so) {
-      if (ageMin >= ORDER_SYNC_GRACE_MINUTES) stats.errors_no_so++;
-      else stats.pending++;
-      continue;
-    }
-    stats.so_created++;
-    if (so.integration_ready !== 'T') { stats.pending++; continue; }
-    stats.ready++;
-    // NetSuite's Shopify SO # must be filled in and be the order this draft became in Shopify
-    const shopifyOrder: string | null = draft.shopify_order;
-    const nsShopifySo: string | null = so.shopify_so?.trim() || null;
-    if (nsShopifySo && nsShopifySo === shopifyOrder) stats.resolved++;
-    else stats.errors_no_order++;
-  }
-  stats.errors = stats.errors_no_so + stats.errors_no_order;
-
-  orderSyncCache.set(key, { at: Date.now(), value: stats });
-  return stats;
 }
 
 router.get('/', async (req: Request, res: Response) => {

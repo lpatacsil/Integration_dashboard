@@ -61,8 +61,8 @@ const chartHint = ref('')
 
 // Flow panel descriptions
 const flowIntros: Record<string, string> = {
-  S2N: 'Orders synced from Shopify into NetSuite. Blocking errors here mean an order is sitting in Shopify with no NetSuite sales order.',
-  N2S: 'Draft orders, fulfillments and inventory pushed from NetSuite to Shopify. Includes SO re-run messages.',
+  S2N: 'Draft orders created in Shopify becoming NetSuite sales orders (SO memo = draft #). Errors are drafts with no sales order after 15 minutes.',
+  N2S: 'Orders to be billed: sales orders with Integration Ready checked, matched to a Shopify order via the Shopify SO # field. Errors are ready orders with no matching Shopify order.',
   IDX: 'Indexing keeps the cross-reference between Shopify and NetSuite objects. A failed or skipped index is what later becomes a MAP-* error on an order.',
 }
 

@@ -4,6 +4,7 @@ import { FLOWS } from '../config';
 import { classifyFlow } from '../severity';
 import { isConfigured } from '../services/netsuite-auth';
 import { fetchNSInternalErrors } from '../services/netsuite-sync';
+import { getOrderSyncStats } from '../services/order-sync';
 import {
   indexById, toOpenBlockingErrors, toOpenIncidents, errorsForFlow,
   computeFlowKpi, computeErrorCategorySummary, computeDailyBreakdown, computeErrorSparkline,
@@ -83,6 +84,25 @@ router.get('/:code', async (req: Request, res: Response) => {
     });
     const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
     const severity = classifyFlow(flowBlocking, heartbeatAgeMin, flowCode);
+
+    // Order flows use the live Shopify + NetSuite matching (same numbers as the overview cards)
+    if (flowCode === 'S2N' || flowCode === 'N2S') {
+      const orderSync = await getOrderSyncStats(startDate, endDate).catch(err => {
+        console.error('flows order sync error:', err.message);
+        return null;
+      });
+      if (orderSync && flowCode === 'S2N') {
+        Object.assign(kpi, {
+          total: orderSync.drafts, succeeded: orderSync.so_created,
+          errored: orderSync.errors_no_so, pending: orderSync.pending_draft,
+        });
+      } else if (orderSync) {
+        Object.assign(kpi, {
+          total: orderSync.ready, succeeded: orderSync.resolved,
+          errored: orderSync.errors_no_order, pending: orderSync.pending_ready,
+        });
+      }
+    }
 
     kpi.successRate = kpi.total > 0 ? ((kpi.succeeded / kpi.total) * 100).toFixed(1) : '—';
 

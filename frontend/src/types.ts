@@ -5,8 +5,8 @@ export interface FlowConfig {
 }
 
 export const FLOWS: Record<string, FlowConfig> = {
-  S2N: { name: 'Shopify \u2192 NetSuite', dir: 'Orders \u00b7 customers \u00b7 payments' },
-  N2S: { name: 'NetSuite \u2192 Shopify', dir: 'Draft orders \u00b7 fulfillments \u00b7 inventory' },
+  S2N: { name: 'Shopify \u2192 NetSuite', dir: 'Draft orders to sales orders' },
+  N2S: { name: 'NetSuite \u2192 Shopify', dir: 'Orders to billed' },
   IDX: { name: 'Indexing', dir: 'Customer \u00b7 item \u00b7 ship-to \u00b7 location' },
   NS:  { name: 'NetSuite internal', dir: 'Vertex \u00b7 inventory \u00b7 validation' },
 }
