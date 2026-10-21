@@ -113,7 +113,7 @@ async function refresh() {
 
     // Update chart hint
     chartHint.value = dateRange.rangeKey.value === 'today'
-      ? 'today, by hour'
+      ? 'today, by hour (Central time)'
       : `${params.startDate} – ${params.endDate}, by day`
 
     // Fetch all flow detail in parallel

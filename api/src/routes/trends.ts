@@ -30,6 +30,27 @@ router.get('/', async (req: Request, res: Response) => {
       : (await getStore().queryTransactions({ start: new Date(startDate), end: endDatePlus1 }))
         .filter(t => t.flow_code !== 'NS');
 
+    // Order-matching data by hour: every hour from the start of the range to now, labelled in Central time
+    if (orderSync && granularity === 'hour') {
+      const fromMs = new Date(startDate + 'T00:00:00Z').getTime();
+      const toMs = Math.min(now.getTime(), endDatePlus1.getTime() - 1);
+      const counts = new Map<number, { ok: number; er: number; pe: number }>();
+      for (const o of orderSync.outcomes) {
+        const hourMs = Math.floor(new Date(o.created_at).getTime() / 3600000) * 3600000;
+        const b = counts.get(hourMs) || { ok: 0, er: 0, pe: 0 };
+        b[o.outcome]++;
+        counts.set(hourMs, b);
+      }
+      const buckets = [];
+      for (let h = fromMs; h <= toMs; h += 3600000) {
+        const label = new Date(h).toLocaleString('en-US', { hour: 'numeric', hour12: true, timeZone: 'America/Chicago' })
+          .replace(' AM', 'a').replace(' PM', 'p');
+        buckets.push({ label, ...(counts.get(h) || { ok: 0, er: 0, pe: 0 }) });
+      }
+      res.json({ granularity, buckets });
+      return;
+    }
+
     const rows = granularity === 'hour' ? computeHourBuckets(transactions) : computeDayBuckets(transactions);
 
     const buckets = rows.map(r => ({
