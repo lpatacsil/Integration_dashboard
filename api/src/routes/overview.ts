@@ -7,7 +7,7 @@ import {
   toOpenBlockingErrors, indexById, groupByFlow, computeFlowCardStats,
   computeTxLast60, computeBaselineLast60, computeErrorSparkline, computeFlowErrorResolution,
 } from '../store/aggregate';
-import { fetchDraftsByDateRange, lookupDraftsByName, isConfigured as shopifyConfigured } from '../services/shopify-client';
+import { fetchDraftsByDateRange, isConfigured as shopifyConfigured } from '../services/shopify-client';
 import { fetchSalesOrders } from '../services/netsuite-sync';
 import { isConfigured as netsuiteConfigured } from '../services/netsuite-auth';
 
@@ -22,62 +22,74 @@ function parseDates(req: Request): { startDate: string; endDate: string } {
   };
 }
 
-// Processed / Succeeded for the order flows come straight from the Shopify + NetSuite APIs:
-//   S2N: processed = draft orders created in range, succeeded = drafts with a NetSuite SO (SO memo = draft #)
-//   N2S: processed = NetSuite SOs (with a draft memo) dated in range, succeeded = SOs whose draft exists in Shopify
-// Cached briefly since the overview auto-refreshes.
-interface FlowCounts { processed: number; succeeded: number }
-interface ReconCounts { S2N: FlowCounts; N2S: FlowCounts }
-
-const RECON_CACHE_MS = 2 * 60 * 1000;
-const reconCountsCache = new Map<string, { at: number; value: ReconCounts }>();
-const DRAFT_MEMO = /^#D\d+$/;
-
-// NetSuite trandate comes back as M/D/YYYY; normalise to YYYY-MM-DD for range checks
-function toIsoDate(trandate: string | null | undefined): string | null {
-  if (!trandate) return null;
-  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(trandate.trim());
-  if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
-  return trandate.slice(0, 10);
+// Order Sync card — follows each Shopify draft created in the range through both legs:
+//   draft → NetSuite SO (SO memo = draft #) → SO marked integration ready → Shopify order exists.
+// Ready + Shopify order = resolved; no SO, or ready without a Shopify order = error;
+// otherwise (not ready yet, or too new to judge) = pending. Cached briefly since the overview auto-refreshes.
+export interface OrderSyncStats {
+  drafts: number;
+  so_created: number;
+  ready: number;
+  resolved: number;
+  errors: number;
+  errors_no_so: number;
+  errors_no_order: number;
+  pending: number;
 }
 
-async function getReconCounts(startDate: string, endDate: string): Promise<ReconCounts | null> {
+const ORDER_SYNC_CACHE_MS = 2 * 60 * 1000;
+const ORDER_SYNC_GRACE_MINUTES = 15;   // same window the recon alerts wait before flagging a draft
+const SO_LOOKAHEAD_DAYS = 7;           // an SO can be created a few days after its draft
+const orderSyncCache = new Map<string, { at: number; value: OrderSyncStats }>();
+const DRAFT_MEMO = /^#D\d+$/;
+
+async function getOrderSyncStats(startDate: string, endDate: string): Promise<OrderSyncStats | null> {
   if (!shopifyConfigured() || !netsuiteConfigured()) return null;
   const key = `${startDate}|${endDate}`;
-  const cached = reconCountsCache.get(key);
-  if (cached && Date.now() - cached.at < RECON_CACHE_MS) return cached.value;
+  const cached = orderSyncCache.get(key);
+  if (cached && Date.now() - cached.at < ORDER_SYNC_CACHE_MS) return cached.value;
 
-  // SOs can land a day after their draft, so look one day past the range on the NetSuite side
+  const todayStr = new Date().toISOString().slice(0, 10);
   const nsEnd = new Date(endDate + 'T00:00:00Z');
-  nsEnd.setUTCDate(nsEnd.getUTCDate() + 1);
+  nsEnd.setUTCDate(nsEnd.getUTCDate() + SO_LOOKAHEAD_DAYS);
+  const nsEndStr = nsEnd.toISOString().slice(0, 10) < todayStr ? nsEnd.toISOString().slice(0, 10) : todayStr;
+
   const [drafts, netsuiteSOs] = await Promise.all([
     fetchDraftsByDateRange(startDate, endDate),
-    fetchSalesOrders(startDate, nsEnd.toISOString().slice(0, 10)),
+    fetchSalesOrders(startDate, nsEndStr),
   ]);
-  const draftSOs = netsuiteSOs.orders.filter((so: any) => DRAFT_MEMO.test(so.memo?.trim() || ''));
+  const soByMemo = new Map<string, Record<string, any>>();
+  for (const so of netsuiteSOs.orders) {
+    const memo = so.memo?.trim();
+    if (memo && DRAFT_MEMO.test(memo)) soByMemo.set(memo, so);
+  }
 
-  const soMemos = new Set(draftSOs.map((so: any) => so.memo.trim()));
-  let s2nSucceeded = 0;
-  for (const name of drafts.keys()) if (soMemos.has(name)) s2nSucceeded++;
-
-  // N2S only counts SOs dated inside the range; drafts created before the range are looked up by name
-  const rangeSOs = draftSOs.filter((so: any) => {
-    const d = toIsoDate(so.trandate);
-    return d != null && d >= startDate && d <= endDate;
-  });
-  const missingNames = rangeSOs.map((so: any) => so.memo.trim()).filter((n: string) => !drafts.has(n));
-  const lookedUp = await lookupDraftsByName(missingNames);
-  const n2sSucceeded = rangeSOs.filter((so: any) => {
-    const name = so.memo.trim();
-    return drafts.has(name) || lookedUp.has(name);
-  }).length;
-
-  const value: ReconCounts = {
-    S2N: { processed: drafts.size, succeeded: s2nSucceeded },
-    N2S: { processed: rangeSOs.length, succeeded: n2sSucceeded },
+  const stats: OrderSyncStats = {
+    drafts: drafts.size, so_created: 0, ready: 0, resolved: 0,
+    errors: 0, errors_no_so: 0, errors_no_order: 0, pending: 0,
   };
-  reconCountsCache.set(key, { at: Date.now(), value });
-  return value;
+  const now = Date.now();
+  for (const [name, draft] of drafts) {
+    const ageMin = (now - new Date(draft.created_at).getTime()) / 60000;
+    const so = soByMemo.get(name);
+    if (!so) {
+      if (ageMin >= ORDER_SYNC_GRACE_MINUTES) stats.errors_no_so++;
+      else stats.pending++;
+      continue;
+    }
+    stats.so_created++;
+    if (so.integration_ready !== 'T') { stats.pending++; continue; }
+    stats.ready++;
+    // Shopify order must exist; if NetSuite already recorded a Shopify SO #, it must be that order
+    const shopifyOrder: string | null = draft.shopify_order;
+    const nsShopifySo: string | null = so.shopify_so?.trim() || null;
+    if (shopifyOrder && (!nsShopifySo || nsShopifySo === shopifyOrder)) stats.resolved++;
+    else stats.errors_no_order++;
+  }
+  stats.errors = stats.errors_no_so + stats.errors_no_order;
+
+  orderSyncCache.set(key, { at: Date.now(), value: stats });
+  return stats;
 }
 
 router.get('/', async (req: Request, res: Response) => {
@@ -91,14 +103,14 @@ router.get('/', async (req: Request, res: Response) => {
     endDatePlus1.setDate(endDatePlus1.getDate() + 1);
 
     // Run independent data fetches in parallel
-    const [openErrors, hb, last28d, rangeTransactions, rangeErrors, reconCounts] = await Promise.all([
+    const [openErrors, hb, last28d, rangeTransactions, rangeErrors, orderSync] = await Promise.all([
       store.getOpenErrors(),
       store.getLatestHeartbeat(),
       store.queryTransactions({ start: new Date(now.getTime() - 28 * 86400000), end: new Date(now.getTime() + 1000) }),
       store.queryTransactions({ start: new Date(startDate), end: endDatePlus1 }),
       store.queryErrors({ start: new Date(startDate), end: endDatePlus1 }),
-      getReconCounts(startDate, endDate).catch(err => {
-        console.error('overview recon counts error:', err.message);
+      getOrderSyncStats(startDate, endDate).catch(err => {
+        console.error('overview order sync error:', err.message);
         return null;
       }),
     ]);
@@ -154,16 +166,6 @@ router.get('/', async (req: Request, res: Response) => {
       };
     }
 
-    // Errors = recon mismatches in range; Team Central error counts are hidden until its API is wired up.
-    // Resolved / reruns stay on Team Central data.
-    if (reconCounts) {
-      for (const f of ['S2N', 'N2S'] as const) {
-        flowStats[f].total = reconCounts[f].processed;
-        flowStats[f].succeeded = reconCounts[f].succeeded;
-        flowStats[f].errored = reconCounts[f].processed - reconCounts[f].succeeded;
-      }
-    }
-
     // 8. Sparkline data: errors per day per flow, last 14 days
     const last14ByFlow = groupByFlow(
       last28d.filter(t => new Date(t.created_at).getTime() >= now.getTime() - 13 * 86400000),
@@ -193,6 +195,7 @@ router.get('/', async (req: Request, res: Response) => {
       openBlocking,
       perFlowSeverity,
       flowStats,
+      orderSync,
       sparklines,
       escalation,
       startDate,

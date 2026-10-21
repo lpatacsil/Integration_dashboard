@@ -297,7 +297,8 @@ export async function fetchSalesOrders(startDate: string, endDate: string): Prom
         t.foreigntotal AS total_amount,
         BUILTIN.DF(t.location) AS location,
         t.trandate,
-        t.custbody_budget_hours AS shopify_so
+        t.custbody_budget_hours AS shopify_so,
+        t.custbody_integration_ready AS integration_ready
       FROM transaction t
       LEFT JOIN customer c ON c.id = t.entity
       WHERE t.type = 'SalesOrd'

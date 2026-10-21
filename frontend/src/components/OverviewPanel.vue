@@ -7,6 +7,7 @@ import type {
 } from '../types'
 import SeverityTile from './SeverityTile.vue'
 import FlowCard from './FlowCard.vue'
+import OrderSyncCard from './OrderSyncCard.vue'
 import TrendChart from './TrendChart.vue'
 import CategoryBreakdown from './CategoryBreakdown.vue'
 import IncidentTable from './IncidentTable.vue'
@@ -20,7 +21,8 @@ const props = defineProps<{
   chartHint: string
 }>()
 
-const flowCodes = Object.keys(FLOWS)
+// S2N + N2S are combined into the Order Sync card
+const flowCodes = Object.keys(FLOWS).filter(f => f !== 'S2N' && f !== 'N2S')
 
 const nsOpenCount = computed(() => {
   return (props.openIncidents?.incidents || []).filter(i => i.flow_code === 'NS').length
@@ -42,6 +44,7 @@ const nsOpenCount = computed(() => {
 
     <!-- Flow cards -->
     <div class="row flows">
+      <OrderSyncCard :stats="overview?.orderSync ?? null" />
       <FlowCard
         v-for="f in flowCodes"
         :key="f"
