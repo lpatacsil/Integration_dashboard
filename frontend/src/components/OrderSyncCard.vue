@@ -30,10 +30,10 @@ const pillCls = computed(() => {
       <div title="Shopify draft orders created in the selected range">Drafts<b>{{ stats?.drafts ?? 0 }}</b></div>
       <div title="Drafts with a NetSuite sales order (memo = draft #)">SO created<b>{{ stats?.so_created ?? 0 }}</b></div>
       <div title="Sales orders with Integration Ready checked">Ready<b>{{ stats?.ready ?? 0 }}</b></div>
-      <div title="Ready sales orders whose Shopify order exists">Resolved<b class="resolved">{{ stats?.resolved ?? 0 }}</b></div>
+      <div title="Ready sales orders whose Shopify SO # matches an order in Shopify">Resolved<b class="resolved">{{ stats?.resolved ?? 0 }}</b></div>
     </div>
     <div class="tally">
-      <span title="No NetSuite SO after 15 minutes, or ready SO with no Shopify order">
+      <span title="No NetSuite SO after 15 minutes, or ready SO whose Shopify SO # is missing / not in Shopify">
         Errors <b :class="{ err: stats?.errors }">{{ stats?.errors ?? 0 }}</b>
         <template v-if="stats?.errors">
           ({{ stats.errors_no_so }} no SO · {{ stats.errors_no_order }} no Shopify order)

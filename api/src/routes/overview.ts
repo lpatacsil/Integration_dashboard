@@ -23,8 +23,8 @@ function parseDates(req: Request): { startDate: string; endDate: string } {
 }
 
 // Order Sync card — follows each Shopify draft created in the range through both legs:
-//   draft → NetSuite SO (SO memo = draft #) → SO marked integration ready → Shopify order exists.
-// Ready + Shopify order = resolved; no SO, or ready without a Shopify order = error;
+//   draft → NetSuite SO (SO memo = draft #) → SO marked integration ready → Shopify SO # matches a Shopify order.
+// Ready + matching Shopify SO # = resolved; no SO, or ready without a Shopify order = error;
 // otherwise (not ready yet, or too new to judge) = pending. Cached briefly since the overview auto-refreshes.
 export interface OrderSyncStats {
   drafts: number;
@@ -80,10 +80,10 @@ async function getOrderSyncStats(startDate: string, endDate: string): Promise<Or
     stats.so_created++;
     if (so.integration_ready !== 'T') { stats.pending++; continue; }
     stats.ready++;
-    // Shopify order must exist; if NetSuite already recorded a Shopify SO #, it must be that order
+    // NetSuite's Shopify SO # must be filled in and be the order this draft became in Shopify
     const shopifyOrder: string | null = draft.shopify_order;
     const nsShopifySo: string | null = so.shopify_so?.trim() || null;
-    if (shopifyOrder && (!nsShopifySo || nsShopifySo === shopifyOrder)) stats.resolved++;
+    if (nsShopifySo && nsShopifySo === shopifyOrder) stats.resolved++;
     else stats.errors_no_order++;
   }
   stats.errors = stats.errors_no_so + stats.errors_no_order;
