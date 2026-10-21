@@ -1,8 +1,8 @@
 import { readJson, writeJson } from '../store/blob-client';
 import { classify } from '../severity';
-import { getOrderSyncStats } from './order-sync';
-import { getRules, getNotificationChannels } from './settings-store';
-import { isEmailEnabled, sendAlertEmail, buildAlertHtml } from './email-notify';
+import { getOrderSyncStats, UnmatchedOrder } from './order-sync';
+import { getNotificationChannels } from './settings-store';
+import { isEmailEnabled, sendAlertEmail } from './email-notify';
 
 // Daily order-sync severity summary, emailed at 8 AM and 5 PM Central.
 // No reminders or level-change emails. Only Larry receives it for now —
@@ -37,9 +37,25 @@ function formatCentral(d: Date): string {
   }) + ' CT';
 }
 
-function listRefs(refs: string[], max = 10): string {
-  if (refs.length === 0) return '—';
-  return refs.slice(0, max).join(', ') + (refs.length > max ? ` … (+${refs.length - max} more)` : '');
+function escapeHtml(v: string): string {
+  return v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+const SEV_COLORS: Record<number, string> = { 0: '#16a34a', 1: '#ca8a04', 2: '#ca8a04', 3: '#ea580c', 4: '#dc2626' };
+const SEV_LABELS: Record<number, string> = {
+  0: 'Healthy',
+  1: 'SEV 1 — one order unmatched',
+  2: 'SEV 2 — more than one unmatched, opened today',
+  3: 'SEV 3 — more than one unmatched, unresolved into day 2',
+  4: 'SEV 4 — tool down',
+};
+
+function issueText(e: UnmatchedOrder): string {
+  return e.flow_code === 'S2N' ? 'No NetSuite sales order' : `${e.sales_order_id}: no matching Shopify order`;
+}
+
+function formatAmount(v: string | null): string {
+  return v ? `$${Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 }
 
 export async function sendSeveritySummary(): Promise<boolean> {
@@ -49,44 +65,55 @@ export async function sendSeveritySummary(): Promise<boolean> {
   if (!stats) return false;
 
   const level = classify(stats.unmatched, 0, 1, 1);
+  const rows = [...stats.unmatched].sort((x, y) => y.occurred_at.localeCompare(x.occurred_at));
   const window = `${start.toISOString().slice(0, 10)} – ${end.toISOString().slice(0, 10)}`;
-  const noSo = stats.unmatched.filter(e => e.flow_code === 'S2N');
-  const noOrder = stats.unmatched.filter(e => e.flow_code === 'N2S');
-  const escalation = level > 0 ? getRules().escalation[level] : null;
-  const wouldEscalate = escalation ? [...escalation.notify, ...escalation.cc].join(', ') + ' (not sent yet)' : '—';
 
   const subject = level === 0
-    ? `✅ Daily order sync: healthy — Shopify ⇄ NetSuite`
-    : `🔴 Daily order sync: SEV ${level}, ${stats.unmatched.length} unmatched — Shopify ⇄ NetSuite`;
+    ? `✅ Daily order sync: Healthy — no drafts with possible errors`
+    : `🔴 Daily order sync: SEV ${level} — ${rows.length} draft(s) with possible errors`;
+
   const body = [
-    `Severity: ${level === 0 ? 'Healthy' : `SEV ${level}`}`,
-    `Window: ${window}`,
-    `Shopify → NetSuite: ${stats.drafts} drafts, ${stats.so_created} with SO, ${noSo.length} unmatched — ${listRefs(noSo.map(e => e.entity_identifier))}`,
-    `NetSuite → Shopify: ${stats.ready} ready, ${stats.resolved} matched, ${noOrder.length} unmatched — ${listRefs(noOrder.map(e => e.entity_identifier))}`,
-    `Pending: ${stats.pending}`,
-    `Would escalate to: ${wouldEscalate}`,
+    `Severity: ${SEV_LABELS[level]}`,
+    `Drafts with possible errors (${window}): ${rows.length}`,
+    '',
+    ...rows.map(e => `${e.draft_number}\t${e.customer || '—'}\t${formatAmount(e.amount)}\t${formatCentral(new Date(e.occurred_at))}\t${issueText(e)}`),
     '', `Dashboard: ${DASHBOARD_URL}`,
   ].join('\n');
-  const html = buildAlertHtml({
-    type: level === 0 ? 'resolved' : 'unmatched',
-    headline: level === 0 ? 'Daily Order Sync · Healthy' : `Daily Order Sync · SEV ${level}`,
-    description: level === 0
-      ? `All drafts and integration-ready orders in the last ${LOOKBACK_DAYS} days are matched.`
-      : `${stats.unmatched.length} order(s) in the last ${LOOKBACK_DAYS} days are not matched between Shopify and NetSuite.`,
-    facts: [
-      { label: 'Window', value: window },
-      { label: 'Shopify → NetSuite', value: `${stats.drafts} drafts · ${stats.so_created} with SO · ${noSo.length} unmatched` },
-      { label: 'Drafts with no SO', value: listRefs(noSo.map(e => e.entity_identifier)) },
-      { label: 'NetSuite → Shopify', value: `${stats.ready} ready · ${stats.resolved} matched · ${noOrder.length} unmatched` },
-      { label: 'Ready SOs with no Shopify order', value: listRefs(noOrder.map(e => e.entity_identifier)) },
-      { label: 'Pending', value: String(stats.pending) },
-      { label: 'Would Escalate To', value: wouldEscalate },
-      { label: 'Generated At', value: formatCentral(end) },
-    ],
-  });
+
+  const cell = 'padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;vertical-align:top';
+  const head = 'padding:8px 10px;border-bottom:2px solid #d1d5db;font-size:12px;color:#6b7280;text-align:left;text-transform:uppercase;letter-spacing:.04em';
+  const table = rows.length === 0
+    ? `<p style="margin:0;font-size:14px;color:#374151">No drafts with possible errors in the last ${LOOKBACK_DAYS} days.</p>`
+    : `<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">
+        <tr><th style="${head}">Draft #</th><th style="${head}">Customer</th><th style="${head};text-align:right">Amount</th><th style="${head}">Created</th><th style="${head}">Possible error</th></tr>
+        ${rows.map(e => `<tr>
+          <td style="${cell};font-family:Consolas,monospace;white-space:nowrap">${escapeHtml(e.draft_number)}</td>
+          <td style="${cell}">${escapeHtml(e.customer || '—')}</td>
+          <td style="${cell};text-align:right;white-space:nowrap">${formatAmount(e.amount)}</td>
+          <td style="${cell};white-space:nowrap">${formatCentral(new Date(e.occurred_at))}</td>
+          <td style="${cell}">${escapeHtml(issueText(e))}</td>
+        </tr>`).join('')}
+      </table>`;
+
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:24px 12px;background:#f3f4f6;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
+<table width="760" cellpadding="0" cellspacing="0" style="max-width:760px;background:#ffffff;border-radius:8px;overflow:hidden">
+  <tr><td style="height:4px;background:${SEV_COLORS[level]}"></td></tr>
+  <tr><td style="padding:20px 24px 8px">
+    <p style="margin:0 0 4px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.06em">Daily order sync · Shopify ⇄ NetSuite</p>
+    <p style="margin:0;font-size:22px;font-weight:700;color:${SEV_COLORS[level]}">${SEV_LABELS[level]}</p>
+    <p style="margin:6px 0 0;font-size:13px;color:#6b7280">${rows.length} draft(s) with possible errors · ${window} · generated ${formatCentral(end)}</p>
+  </td></tr>
+  <tr><td style="padding:12px 24px 20px">${table}</td></tr>
+  <tr><td style="padding:12px 24px;background:#f9fafb;font-size:12px;color:#6b7280"><a href="${DASHBOARD_URL}" style="color:#2563eb">Open the dashboard</a></td></tr>
+</table>
+</td></tr></table>
+</body></html>`;
 
   const sent = await sendAlertEmail(RECIPIENTS, [], subject, body, html);
-  console.log(`[severity-alert] daily summary (SEV ${level}): email ${sent ? 'sent' : 'failed'}`);
+  console.log(`[severity-alert] daily summary (SEV ${level}, ${rows.length} drafts): email ${sent ? 'sent' : 'failed'}`);
   return sent;
 }
 

@@ -18,7 +18,19 @@ export interface OrderSyncStats {
   pending: number;
   pending_draft: number;   // draft too new to judge (S2N)
   pending_ready: number;   // SO created but not integration ready yet (N2S)
-  unmatched: OpenBlockingError[];   // each error as a blocking item, so it feeds the severity ladder
+  unmatched: UnmatchedOrder[];   // each error as a blocking item, so it feeds the severity ladder
+  outcomes: DraftOutcome[];      // one per draft, for the volume-by-outcome chart
+}
+
+export interface UnmatchedOrder extends OpenBlockingError {
+  draft_number: string;
+  customer: string | null;
+  amount: string | null;
+}
+
+export interface DraftOutcome {
+  created_at: string;
+  outcome: 'ok' | 'er' | 'pe';
 }
 
 const ORDER_SYNC_CACHE_MS = 2 * 60 * 1000;
@@ -28,9 +40,11 @@ const orderSyncCache = new Map<string, { at: number; value: OrderSyncStats }>();
 const DRAFT_MEMO = /^#D\d+$/;
 
 function unmatchedItem(
-  flowCode: string, ref: string, code: string, message: string, occurredAt: string, salesOrder: string | null,
-): OpenBlockingError {
+  flowCode: string, ref: string, code: string, message: string, salesOrder: string | null, draft: Record<string, any>,
+): UnmatchedOrder {
+  const occurredAt: string = draft.created_at;
   return {
+    draft_number: draft.draft_number, customer: draft.customer || null, amount: draft.total_price || null,
     error_id: `${code}:${ref}`, transaction_id: ref, flow_code: flowCode, entity_identifier: ref,
     error_code: code, error_message: message, occurred_at: occurredAt,
     sales_order_id: salesOrder, transaction_type: flowCode === 'S2N' ? 'Draft Order' : 'Sales Order',
@@ -61,7 +75,7 @@ export async function getOrderSyncStats(startDate: string, endDate: string): Pro
   const stats: OrderSyncStats = {
     drafts: drafts.size, so_created: 0, ready: 0, resolved: 0,
     errors: 0, errors_no_so: 0, errors_no_order: 0, pending: 0, pending_draft: 0, pending_ready: 0,
-    unmatched: [],
+    unmatched: [], outcomes: [],
   };
   const now = Date.now();
   for (const [name, draft] of drafts) {
@@ -70,22 +84,33 @@ export async function getOrderSyncStats(startDate: string, endDate: string): Pro
     if (!so) {
       if (ageMin >= ORDER_SYNC_GRACE_MINUTES) {
         stats.errors_no_so++;
-        stats.unmatched.push(unmatchedItem('S2N', name, 'UNMATCHED-SO', `${name} has no NetSuite sales order`, draft.created_at, null));
-      } else stats.pending_draft++;
+        stats.unmatched.push(unmatchedItem('S2N', name, 'UNMATCHED-SO', `${name} has no NetSuite sales order`, null, draft));
+        stats.outcomes.push({ created_at: draft.created_at, outcome: 'er' });
+      } else {
+        stats.pending_draft++;
+        stats.outcomes.push({ created_at: draft.created_at, outcome: 'pe' });
+      }
       continue;
     }
     stats.so_created++;
-    if (so.integration_ready !== 'T') { stats.pending_ready++; continue; }
+    if (so.integration_ready !== 'T') {
+      stats.pending_ready++;
+      stats.outcomes.push({ created_at: draft.created_at, outcome: 'pe' });
+      continue;
+    }
     stats.ready++;
     // NetSuite's Shopify SO # must be filled in and be the order this draft became in Shopify
     const shopifyOrder: string | null = draft.shopify_order;
     const nsShopifySo: string | null = so.shopify_so?.trim() || null;
-    if (nsShopifySo && nsShopifySo === shopifyOrder) stats.resolved++;
-    else {
+    if (nsShopifySo && nsShopifySo === shopifyOrder) {
+      stats.resolved++;
+      stats.outcomes.push({ created_at: draft.created_at, outcome: 'ok' });
+    } else {
       stats.errors_no_order++;
       stats.unmatched.push(unmatchedItem('N2S', so.so_number, 'UNMATCHED-ORDER',
         nsShopifySo ? `${so.so_number} Shopify SO # ${nsShopifySo} does not match a Shopify order` : `${so.so_number} is integration ready but has no Shopify SO #`,
-        draft.created_at, so.so_number));
+        so.so_number, draft));
+      stats.outcomes.push({ created_at: draft.created_at, outcome: 'er' });
     }
   }
   stats.errors = stats.errors_no_so + stats.errors_no_order;
