@@ -6,6 +6,7 @@ import {
   getIncidentHistory,
   getUnsentNotifications,
 } from '../services/alert-engine';
+import { sendSeveritySummary } from '../services/severity-alert';
 
 const router = Router();
 
@@ -62,6 +63,16 @@ router.get('/unsent', async (_req: Request, res: Response) => {
     res.json({ notifications, count: notifications.length });
   } catch (err: any) {
     console.error('alert-engine/unsent error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/alert-engine/severity-summary — send the daily order-sync severity email now (same recipients as the schedule)
+router.post('/severity-summary', async (_req: Request, res: Response) => {
+  try {
+    const sent = await sendSeveritySummary();
+    res.json({ sent });
+  } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
