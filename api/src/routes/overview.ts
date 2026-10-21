@@ -22,7 +22,7 @@ function parseDates(req: Request): { startDate: string; endDate: string } {
   };
 }
 
-// Order Sync card — follows each Shopify draft created in the range through both legs:
+// Order flow stats — follow each Shopify draft created in the range through both legs:
 //   draft → NetSuite SO (SO memo = draft #) → SO marked integration ready → Shopify SO # matches a Shopify order.
 // Ready + matching Shopify SO # = resolved; no SO, or ready without a Shopify order = error;
 // otherwise (not ready yet, or too new to judge) = pending. Cached briefly since the overview auto-refreshes.
@@ -164,6 +164,16 @@ router.get('/', async (req: Request, res: Response) => {
         pending_rerun: stats?.pending_rerun || 0,
         reruns: stats?.reruns || 0,
       };
+    }
+
+    // Order flows use the live Shopify + NetSuite matching; resolved / reruns stay on Team Central data
+    if (orderSync) {
+      Object.assign(flowStats.S2N, {
+        total: orderSync.drafts, succeeded: orderSync.so_created, errored: orderSync.errors_no_so,
+      });
+      Object.assign(flowStats.N2S, {
+        total: orderSync.ready, succeeded: orderSync.resolved, errored: orderSync.errors_no_order,
+      });
     }
 
     // 8. Sparkline data: errors per day per flow, last 14 days

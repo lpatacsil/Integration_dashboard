@@ -61,17 +61,6 @@ export interface EscalationRule {
   renotifyMinutes: number
 }
 
-export interface OrderSyncStats {
-  drafts: number
-  so_created: number
-  ready: number
-  resolved: number
-  errors: number
-  errors_no_so: number
-  errors_no_order: number
-  pending: number
-}
-
 export interface OverviewResponse {
   severity: number
   heartbeatAgeMin: number
@@ -81,7 +70,6 @@ export interface OverviewResponse {
   openBlocking: OpenBlockingError[]
   perFlowSeverity: Record<string, number>
   flowStats: Record<string, FlowStats>
-  orderSync: OrderSyncStats | null
   sparklines: Record<string, number[]>
   escalation: EscalationInfo | null
   startDate: string
