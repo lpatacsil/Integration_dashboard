@@ -154,11 +154,13 @@ router.get('/', async (req: Request, res: Response) => {
       };
     }
 
-    // Errors / resolved / reruns stay on Team Central data until its API is wired up
+    // Errors = recon mismatches in range; Team Central error counts are hidden until its API is wired up.
+    // Resolved / reruns stay on Team Central data.
     if (reconCounts) {
       for (const f of ['S2N', 'N2S'] as const) {
         flowStats[f].total = reconCounts[f].processed;
         flowStats[f].succeeded = reconCounts[f].succeeded;
+        flowStats[f].errored = reconCounts[f].processed - reconCounts[f].succeeded;
       }
     }
 
