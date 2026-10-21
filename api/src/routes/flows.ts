@@ -2,8 +2,7 @@ import { Router, Request, Response } from 'express';
 import { getStore } from '../store';
 import { FLOWS } from '../config';
 import { classifyFlow } from '../severity';
-import { isConfigured } from '../services/netsuite-auth';
-import { fetchNSInternalErrors } from '../services/netsuite-sync';
+import { getNsIssues } from '../services/ns-internal';
 import { getOrderSyncStats } from '../services/order-sync';
 import { getRelatedCases } from '../services/cases';
 import {
@@ -110,52 +109,34 @@ router.get('/:code', async (req: Request, res: Response) => {
 
     kpi.successRate = kpi.total > 0 ? ((kpi.succeeded / kpi.total) * 100).toFixed(1) : '—';
 
-    // For the NS flow, merge live NetSuite Vertex data if credentials are configured
-    let nsInternalData = null;
-    if (flowCode === 'NS' && isConfigured()) {
-      try {
-        nsInternalData = await fetchNSInternalErrors(startDate, endDate);
+    // For the NS flow, pull the failing sales orders straight from NetSuite (Vertex, inventory, validation):
+    // posted = SOs in range, failed = SOs with at least one issue, categories = SOs per category
+    let nsIssues = null;
+    if (flowCode === 'NS') {
+      nsIssues = await getNsIssues(startDate, endDate).catch(err => {
+        console.error('Failed to fetch NS internal issues from NetSuite:', err.message);
+        return null;
+      });
+      if (nsIssues) {
+        const failedSos = new Set(nsIssues.issues.map(i => i.so_id)).size;
+        kpi.total = nsIssues.total_sos;
+        kpi.errored = failedSos;
+        kpi.succeeded = Math.max(0, nsIssues.total_sos - failedSos);
+        kpi.successRate = kpi.total > 0 ? ((kpi.succeeded / kpi.total) * 100).toFixed(1) : '—';
 
-        const vtx = nsInternalData.vertex;
-        kpi.total += vtx.total;
-        kpi.succeeded += vtx.passed;
-        kpi.errored += vtx.failed;
-
-        const localErrorTxnIds = new Set(openIncidents.map((r: any) => String(r.entity_identifier)));
-        for (const err of vtx.errors) {
-          if (!localErrorTxnIds.has(String(err.transaction_id))) {
-            openIncidents.push({
-              error_id: `ns-vtx-${err.id}` as any,
-              entity_identifier: err.transaction_id,
-              transaction_type: 'Sales Order',
-              error_code: err.error_code,
-              category_label: err.category_label,
-              error_group: err.error_group,
-              is_blocking: false,
-              error_message: err.error_message,
-              occurred_at: err.occurred_at,
-              age_minutes: 0,
-              source: 'netsuite_direct',
-            } as any);
-          }
+        const labels: Record<string, string> = {
+          'TAX-VERTEX': 'Vertex tax calculation failed',
+          'INV-ITEM': 'Inventory item not recognized / short',
+          'VAL-DATA': 'Validation / missing required field',
+        };
+        for (const code of Object.keys(labels)) {
+          const count = nsIssues.issues.filter(i => i.category === code).length;
+          if (count === 0) continue;
+          const existing = categories.find(c => c.error_code === code);
+          if (existing) (existing as any).count = count;
+          else categories.push({ error_code: code, category_label: labels[code], error_group: 'NETSUITE', is_blocking: false, count } as any);
         }
-
-        if (vtx.failed > 0) {
-          const existingVtx = categories.find((c) => c.error_code === 'TAX-VERTEX');
-          if (existingVtx) {
-            (existingVtx as any).count += vtx.failed;
-            (existingVtx as any).netsuite_direct_count = vtx.failed;
-          } else {
-            categories.push({
-              error_code: 'TAX-VERTEX', category_label: 'Vertex tax calculation failed',
-              error_group: 'NETSUITE', is_blocking: false, count: vtx.failed,
-              netsuite_direct_count: vtx.failed,
-            } as any);
-          }
-          categories.sort((a, b) => b.count - a.count);
-        }
-      } catch (err: any) {
-        console.error('Failed to fetch NS internal errors from NetSuite:', err.message);
+        categories.sort((a, b) => b.count - a.count);
       }
     }
 
@@ -195,7 +176,7 @@ router.get('/:code', async (req: Request, res: Response) => {
       sparkline,
       ...(indexingNeeds ? { indexingNeeds } : {}),
       ...(relatedCases ? { relatedCases } : {}),
-      ...(nsInternalData ? { nsDirectSource: nsInternalData.source, nsVertexCounts: nsInternalData.vertex } : {}),
+      ...(nsIssues ? { nsIssues: nsIssues.issues, nsSourceErrors: nsIssues.source_errors } : {}),
     });
   } catch (err: any) {
     console.error('flows error:', err);
