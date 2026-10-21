@@ -194,6 +194,7 @@ export interface RelatedCase {
   draft_number: string | null
   created_date: string
   url: string
+  integration_reason: string | null
 }
 
 /* ── /api/alerts ── */

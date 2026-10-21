@@ -21,6 +21,7 @@ export interface RelatedCase {
   draft_number: string | null;
   created_date: string;
   url: string;
+  integration_reason: string | null;   // why it looks like an integration case; null = other order work
 }
 
 export interface RelatedCases { S2N: RelatedCase[]; N2S: RelatedCase[] }
@@ -31,6 +32,16 @@ const cache = new Map<string, { at: number; value: RelatedCases }>();
 const SO_NUMBER = /^SO\d+$/i;
 // Matches "#D28627", "D28627" and "Draft order # D28627"
 const DRAFT_MENTION = /#?\s*\bD\s?(\d{5,6})\b/gi;
+
+// Integration cases are told apart from ordinary order work (freight, invoices…) by their wording
+const INTEGRATION_PATTERNS: { reason: string; match: RegExp }[] = [
+  { reason: 'Not porting to NetSuite', match: /\bnot\s+(porting|ported|port|syncing|synced|sync|showing|coming over|created)\b|didn'?t\s+(port|sync|come over)|\bteam\s*central\b|\bintegration\b/i },
+  { reason: 'Item mapping', match: /\bre-?map|\bmapped\s+to\b|\bmapping\b|\bnot\s+mapped\b/i },
+];
+
+function integrationReason(text: string): string | null {
+  return INTEGRATION_PATTERNS.find(p => p.match.test(text))?.reason ?? null;
+}
 
 function toNsDate(iso: string): string {
   const [y, m, d] = iso.split('-');
@@ -115,6 +126,7 @@ export async function getRelatedCases(startDate: string, endDate: string): Promi
       draft_number: draft,
       created_date: c.created_date,
       url: CASE_URL(String(c.id)),
+      integration_reason: integrationReason(text),
     };
     if (draft) result.S2N.push(row);
     if (info?.ready) result.N2S.push(row);
