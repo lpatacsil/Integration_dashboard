@@ -87,10 +87,13 @@ router.get('/sales-orders', async (req: Request, res: Response) => {
 router.get('/_discover-cases', async (_req: Request, res: Response) => {
   try {
     const { suiteQL } = await import('../services/netsuite-client');
-    const type = await suiteQL(`SELECT scriptid, name FROM customrecordtype WHERE internalid = 2049`, 1, 0);
-    const scriptId = (type.items[0] as any)?.scriptid;
-    const sample = scriptId ? await suiteQL(`SELECT * FROM ${scriptId} ORDER BY id DESC`, 3, 0) : null;
-    res.json({ type: type.items, sample: sample?.items ?? null });
+    const [sample, labels, sources] = await Promise.all([
+      suiteQL(`SELECT * FROM customrecord_issue_log WHERE name = 'ISS-220926112259-0' OR custrecord_il_source = 'Sales Order' ORDER BY id DESC`, 2, 0),
+      suiteQL(`SELECT id, BUILTIN.DF(custrecord_il_status) AS status, BUILTIN.DF(custrecord_il_owner) AS owner, BUILTIN.DF(custrecord_il_assigned_to) AS assigned FROM customrecord_issue_log WHERE custrecord_il_source = 'Sales Order' ORDER BY id DESC`, 2, 0),
+      suiteQL(`SELECT custrecord_il_source AS source, BUILTIN.DF(custrecord_il_status) AS status, COUNT(id) AS cnt FROM customrecord_issue_log GROUP BY custrecord_il_source, BUILTIN.DF(custrecord_il_status)`, 50, 0),
+    ]);
+    const strip = (r: any) => { const { custrecord_il_comment_history, custrecord_il_detail, ...rest } = r; return { ...rest, detail: String(custrecord_il_detail || '').slice(0, 200) }; };
+    res.json({ sample: sample.items.map(strip), labels: labels.items, sources: sources.items });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
