@@ -102,6 +102,23 @@ export async function suiteQL(
   };
 }
 
+/** Run a SuiteQL query and follow pagination, up to 5000 rows. */
+export async function suiteQLAll(query: string): Promise<Record<string, any>[]> {
+  const rows: Record<string, any>[] = [];
+  for (let offset = 0; offset < 5000; offset += 1000) {
+    const res = await suiteQL(query, 1000, offset);
+    rows.push(...res.items);
+    if (!res.hasMore) break;
+  }
+  return rows;
+}
+
+/** YYYY-MM-DD → M/D/YYYY, the date format SuiteQL compares against. */
+export function toNsDate(iso: string): string {
+  const [y, m, d] = iso.split('-');
+  return `${Number(m)}/${Number(d)}/${y}`;
+}
+
 /**
  * GET a single NetSuite record by type and internal ID.
  */

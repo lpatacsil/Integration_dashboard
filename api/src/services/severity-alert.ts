@@ -117,6 +117,8 @@ export async function sendSeveritySummary(): Promise<boolean> {
   return sent;
 }
 
+let checking = false;
+
 async function checkSchedule(): Promise<void> {
   const { date, hour } = centralNow();
   // Only send during the scheduled hour itself, so a restart later in the day doesn't send a stale summary
@@ -127,10 +129,17 @@ async function checkSchedule(): Promise<void> {
   const channels = getNotificationChannels();
   if (!channels.email.enabled || !isEmailEnabled()) return;
 
-  // Only mark the slot done once the email is out, so a failed send retries next minute
-  if (await sendSeveritySummary()) {
-    state = { last_slot: slot };
-    await writeJson(BLOB_PATH, state);
+  // A slow fetch can outlast the 60s tick; skip overlapping runs so the summary isn't sent twice
+  if (checking) return;
+  checking = true;
+  try {
+    // Only mark the slot done once the email is out, so a failed send retries next minute
+    if (await sendSeveritySummary()) {
+      state = { last_slot: slot };
+      await writeJson(BLOB_PATH, state);
+    }
+  } finally {
+    checking = false;
   }
 }
 

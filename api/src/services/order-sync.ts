@@ -36,7 +36,7 @@ export interface DraftOutcome {
 const ORDER_SYNC_CACHE_MS = 2 * 60 * 1000;
 const ORDER_SYNC_GRACE_MINUTES = 15;   // same window the recon alerts wait before flagging a draft
 const SO_LOOKAHEAD_DAYS = 7;           // an SO can be created a few days after its draft
-const orderSyncCache = new Map<string, { at: number; value: OrderSyncStats }>();
+const orderSyncCache = new Map<string, { at: number; value: Promise<OrderSyncStats> }>();
 const DRAFT_MEMO = /^#D\d+$/;
 
 function unmatchedItem(
@@ -57,6 +57,20 @@ export async function getOrderSyncStats(startDate: string, endDate: string): Pro
   const cached = orderSyncCache.get(key);
   if (cached && Date.now() - cached.at < ORDER_SYNC_CACHE_MS) return cached.value;
 
+  // Cache the in-flight fetch so the overview, trends and flow tabs share one round of API calls
+  const value = computeOrderSyncStats(startDate, endDate);
+  orderSyncCache.set(key, { at: Date.now(), value });
+  value.catch(() => orderSyncCache.delete(key));
+  return value;
+}
+
+// Shopify returns "#2029097"; tolerate a missing "#", stray spaces or case differences on the NetSuite side
+function normalizeOrderName(name: string | null | undefined): string | null {
+  const n = name?.replace(/\s+/g, '').replace(/^#/, '').toUpperCase();
+  return n || null;
+}
+
+async function computeOrderSyncStats(startDate: string, endDate: string): Promise<OrderSyncStats> {
   const todayStr = new Date().toISOString().slice(0, 10);
   const nsEnd = new Date(endDate + 'T00:00:00Z');
   nsEnd.setUTCDate(nsEnd.getUTCDate() + SO_LOOKAHEAD_DAYS);
@@ -66,6 +80,8 @@ export async function getOrderSyncStats(startDate: string, endDate: string): Pro
     fetchDraftsByDateRange(startDate, endDate),
     fetchSalesOrders(startDate, nsEndStr),
   ]);
+  // fetchSalesOrders swallows its errors; an outage must not turn every draft into "no SO"
+  if (netsuiteSOs.source.startsWith('error')) throw new Error(`NetSuite sales order fetch failed (${netsuiteSOs.source})`);
   const soByMemo = new Map<string, Record<string, any>>();
   for (const so of netsuiteSOs.orders) {
     const memo = so.memo?.trim();
@@ -102,7 +118,7 @@ export async function getOrderSyncStats(startDate: string, endDate: string): Pro
     // NetSuite's Shopify SO # must be filled in and be the order this draft became in Shopify
     const shopifyOrder: string | null = draft.shopify_order;
     const nsShopifySo: string | null = so.shopify_so?.trim() || null;
-    if (nsShopifySo && nsShopifySo === shopifyOrder) {
+    if (nsShopifySo && normalizeOrderName(nsShopifySo) === normalizeOrderName(shopifyOrder)) {
       stats.resolved++;
       stats.outcomes.push({ created_at: draft.created_at, outcome: 'ok' });
     } else {
@@ -116,6 +132,5 @@ export async function getOrderSyncStats(startDate: string, endDate: string): Pro
   stats.errors = stats.errors_no_so + stats.errors_no_order;
   stats.pending = stats.pending_draft + stats.pending_ready;
 
-  orderSyncCache.set(key, { at: Date.now(), value: stats });
   return stats;
 }

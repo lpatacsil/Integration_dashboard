@@ -1,4 +1,4 @@
-import { suiteQL } from './netsuite-client';
+import { suiteQL, suiteQLAll, toNsDate } from './netsuite-client';
 import { isConfigured } from './netsuite-auth';
 import { fetchNSInternalErrors } from './netsuite-sync';
 
@@ -31,36 +31,23 @@ const DRAFT_MEMO = /^#D\d+$/;
 // Cancelled / closed SOs don't need fixing
 const INACTIVE_SO_STATUS = `('SalesOrd:C', 'SalesOrd:H')`;
 
-function toNsDate(iso: string): string {
-  const [y, m, d] = iso.split('-');
-  return `${Number(m)}/${Number(d)}/${y}`;
-}
-
 function draftOf(memo: string | null | undefined): string | null {
   const m = memo?.trim();
   return m && DRAFT_MEMO.test(m) ? m : null;
 }
 
-async function suiteQLAll(query: string): Promise<Record<string, any>[]> {
-  const rows: Record<string, any>[] = [];
-  for (let offset = 0; offset < 5000; offset += 1000) {
-    const res = await suiteQL(query, 1000, offset);
-    rows.push(...res.items);
-    if (!res.hasMore) break;
-  }
-  return rows;
-}
-
 async function vertexIssues(startDate: string, endDate: string): Promise<NsIssue[]> {
   const { vertex, source } = await fetchNSInternalErrors(startDate, endDate);
   if (source.startsWith('error')) throw new Error(source);
-  const ids = [...new Set(vertex.errors.map(e => String(e.transaction_id)).filter(Boolean))];
-  if (ids.length === 0) return [];
-  const sos = await suiteQLAll(`
-    SELECT id, tranid, memo, BUILTIN.DF(entity) AS customer
-    FROM transaction WHERE id IN (${ids.map(Number).filter(n => !isNaN(n)).join(',')})
-  `);
-  const soById = new Map(sos.map(s => [String(s.id), s]));
+  const ids = [...new Set(vertex.errors.map(e => Number(e.transaction_id)).filter(n => Number.isInteger(n)))];
+  const soById = new Map<string, Record<string, any>>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const sos = await suiteQLAll(`
+      SELECT id, tranid, memo, BUILTIN.DF(entity) AS customer
+      FROM transaction WHERE id IN (${ids.slice(i, i + 200).join(',')})
+    `);
+    for (const s of sos) soById.set(String(s.id), s);
+  }
   // Newest error per SO
   const seen = new Set<string>();
   const issues: NsIssue[] = [];
@@ -171,10 +158,16 @@ export async function getNsIssues(startDate: string, endDate: string): Promise<N
     guard('Vertex', vertexIssues(startDate, endDate)),
     guard('Inventory', inventoryIssues(startDate, endDate)),
     guard('Validation', validationIssues(startDate, endDate)),
+    // Same scope as the checks (open SOs only), so the passed / success-rate figures line up
     suiteQL(`
       SELECT COUNT(id) AS cnt FROM transaction
-      WHERE type = 'SalesOrd' AND trandate >= '${toNsDate(startDate)}' AND trandate <= '${toNsDate(endDate)}'
-    `, 1, 0).catch(() => null),
+      WHERE type = 'SalesOrd' AND status NOT IN ${INACTIVE_SO_STATUS}
+        AND trandate >= '${toNsDate(startDate)}' AND trandate <= '${toNsDate(endDate)}'
+    `, 1, 0).catch(err => {
+      console.error('[ns-internal] SO count query failed:', err.message);
+      source_errors.push(`SO count: ${err.message}`);
+      return null;
+    }),
   ]);
 
   const value: NsIssues = {

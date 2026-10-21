@@ -1,4 +1,4 @@
-import { suiteQL } from './netsuite-client';
+import { suiteQLAll, toNsDate } from './netsuite-client';
 import { isConfigured as netsuiteConfigured } from './netsuite-auth';
 import { lookupDraftsByName, isConfigured as shopifyConfigured } from './shopify-client';
 
@@ -40,11 +40,6 @@ function integrationReason(text: string): string | null {
   return INTEGRATION_PATTERNS.find(p => p.match.test(text))?.reason ?? null;
 }
 
-function toNsDate(iso: string): string {
-  const [y, m, d] = iso.split('-');
-  return `${Number(m)}/${Number(d)}/${y}`;
-}
-
 function htmlToText(html: string): string {
   return html
     .replace(/<br\s*\/?>|<\/(p|div|li)>/gi, ' ')
@@ -52,16 +47,6 @@ function htmlToText(html: string): string {
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/\s+/g, ' ')
     .trim();
-}
-
-async function suiteQLAll(query: string): Promise<Record<string, any>[]> {
-  const rows: Record<string, any>[] = [];
-  for (let offset = 0; offset < 5000; offset += 1000) {
-    const res = await suiteQL(query, 1000, offset);
-    rows.push(...res.items);
-    if (!res.hasMore) break;
-  }
-  return rows;
 }
 
 export async function getRelatedCases(startDate: string, endDate: string): Promise<RelatedCase[] | null> {
