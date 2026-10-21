@@ -24,6 +24,7 @@ import csvImportRouter from './routes/csv-import';
 import { loadSettings } from './services/settings-store';
 import { seed } from './seed';
 import { startReconSync } from './services/recon-sync';
+import { startSeverityAlerts } from './services/severity-alert';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || process.env.API_PORT || '3001', 10);
@@ -78,6 +79,7 @@ loadSettings().then(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`API listening on http://0.0.0.0:${PORT}`);
     startReconSync();
+    startSeverityAlerts();
   });
 }).catch(err => {
   console.error('Failed to load settings:', err);
