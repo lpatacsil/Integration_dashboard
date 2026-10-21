@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { fetchJSON, postJSON } from '../composables/useApi'
 import KpiCard from './KpiCard.vue'
-import type { ReconciliationResponse, ReconRecord, ReconSyncStatus, ResolvedDraft } from '../types'
+import type { ReconciliationResponse, ReconRecord, ReconSyncStatus, ResolvedDraft, UnmatchedDraft } from '../types'
 import { formatAge } from '../types'
 
 function todayStr(): string {
@@ -175,6 +175,47 @@ function sortIndicator(key: string): string {
   if (sortKey.value !== key) return '↕'
   return sortDir.value === 'asc' ? '▲' : '▼'
 }
+
+// Same click-to-sort behaviour for the unmatched drafts table (background sync)
+const UNMATCHED_SORT: Record<string, (d: UnmatchedDraft) => string | number | null> = {
+  draft: d => d.draft_number,
+  customer: d => d.shopify_customer?.toLowerCase() ?? null,
+  amount: d => (d.shopify_amount ? Number(d.shopify_amount) : null),
+  created: d => (d.shopify_created ? new Date(d.shopify_created).getTime() : null),
+  age: d => d.age_minutes,
+}
+const unmatchedSortKey = ref<string | null>(null)
+const unmatchedSortDir = ref<'asc' | 'desc'>('asc')
+
+function toggleUnmatchedSort(key: string) {
+  if (unmatchedSortKey.value === key) {
+    unmatchedSortDir.value = unmatchedSortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    unmatchedSortKey.value = key
+    unmatchedSortDir.value = 'asc'
+  }
+}
+
+function unmatchedIndicator(key: string): string {
+  if (unmatchedSortKey.value !== key) return '↕'
+  return unmatchedSortDir.value === 'asc' ? '▲' : '▼'
+}
+
+const sortedUnmatched = computed<UnmatchedDraft[]>(() => {
+  const rows = syncStatus.value?.unmatched_drafts || []
+  const value = unmatchedSortKey.value ? UNMATCHED_SORT[unmatchedSortKey.value] : null
+  if (!value) return rows
+  const dir = unmatchedSortDir.value === 'asc' ? 1 : -1
+  return [...rows].sort((a, b) => {
+    const va = value(a)
+    const vb = value(b)
+    // Empty values always go last, regardless of direction
+    if (va == null && vb == null) return 0
+    if (va == null) return 1
+    if (vb == null) return -1
+    return va < vb ? -dir : va > vb ? dir : 0
+  })
+})
 
 const sorted = computed<ReconRecord[]>(() => {
   const col = sortKey.value ? SORT_COLUMNS[sortKey.value] : null
@@ -392,16 +433,16 @@ function formatSyncTime(iso: string): string {
           <thead>
             <tr>
               <th>Status</th>
-              <th>Draft #</th>
-              <th>Customer</th>
-              <th class="num">Amount</th>
-              <th>Created</th>
-              <th>Age</th>
+              <th class="sortable" :class="{ sorted: unmatchedSortKey === 'draft' }" @click="toggleUnmatchedSort('draft')">Draft # <span class="sort-ind">{{ unmatchedIndicator('draft') }}</span></th>
+              <th class="sortable" :class="{ sorted: unmatchedSortKey === 'customer' }" @click="toggleUnmatchedSort('customer')">Customer <span class="sort-ind">{{ unmatchedIndicator('customer') }}</span></th>
+              <th class="num sortable" :class="{ sorted: unmatchedSortKey === 'amount' }" @click="toggleUnmatchedSort('amount')">Amount <span class="sort-ind">{{ unmatchedIndicator('amount') }}</span></th>
+              <th class="sortable" :class="{ sorted: unmatchedSortKey === 'created' }" @click="toggleUnmatchedSort('created')">Created <span class="sort-ind">{{ unmatchedIndicator('created') }}</span></th>
+              <th class="sortable" :class="{ sorted: unmatchedSortKey === 'age' }" @click="toggleUnmatchedSort('age')">Age <span class="sort-ind">{{ unmatchedIndicator('age') }}</span></th>
               <th>Notified</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="d in syncStatus.unmatched_drafts" :key="d.draft_number" class="row-alert">
+            <tr v-for="d in sortedUnmatched" :key="d.draft_number" class="row-alert">
               <td>
                 <span v-if="d.age_minutes >= 15" class="pill alert">Alert</span>
                 <span v-else class="pill s3">Watching</span>
