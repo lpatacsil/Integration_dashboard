@@ -78,30 +78,33 @@ router.get('/:code', async (req: Request, res: Response) => {
     // Per-flow severity, scoped to the selected date range by occurred_at (matches overview.ts)
     const rangeStartMs = range.start.getTime();
     const rangeEndMs = range.end.getTime();
+    // Order flows use the live Shopify + NetSuite matching; unmatched orders count as blocking
+    const orderSync = (flowCode === 'S2N' || flowCode === 'N2S')
+      ? await getOrderSyncStats(startDate, endDate).catch(err => {
+        console.error('flows order sync error:', err.message);
+        return null;
+      })
+      : null;
+
     const flowBlocking = toOpenBlockingErrors(openErrorsForFlow, openTxById).filter(e => {
       const t = new Date(e.occurred_at).getTime();
       return t >= rangeStartMs && t < rangeEndMs;
     });
+    if (orderSync) flowBlocking.push(...orderSync.unmatched.filter(e => e.flow_code === flowCode));
     const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
     const severity = classifyFlow(flowBlocking, heartbeatAgeMin, flowCode);
 
-    // Order flows use the live Shopify + NetSuite matching (same numbers as the overview cards)
-    if (flowCode === 'S2N' || flowCode === 'N2S') {
-      const orderSync = await getOrderSyncStats(startDate, endDate).catch(err => {
-        console.error('flows order sync error:', err.message);
-        return null;
+    // Same numbers as the overview cards
+    if (orderSync && flowCode === 'S2N') {
+      Object.assign(kpi, {
+        total: orderSync.drafts, succeeded: orderSync.so_created,
+        errored: orderSync.errors_no_so, pending: orderSync.pending_draft,
       });
-      if (orderSync && flowCode === 'S2N') {
-        Object.assign(kpi, {
-          total: orderSync.drafts, succeeded: orderSync.so_created,
-          errored: orderSync.errors_no_so, pending: orderSync.pending_draft,
-        });
-      } else if (orderSync) {
-        Object.assign(kpi, {
-          total: orderSync.ready, succeeded: orderSync.resolved,
-          errored: orderSync.errors_no_order, pending: orderSync.pending_ready,
-        });
-      }
+    } else if (orderSync) {
+      Object.assign(kpi, {
+        total: orderSync.ready, succeeded: orderSync.resolved,
+        errored: orderSync.errors_no_order, pending: orderSync.pending_ready,
+      });
     }
 
     kpi.successRate = kpi.total > 0 ? ((kpi.succeeded / kpi.total) * 100).toFixed(1) : '—';

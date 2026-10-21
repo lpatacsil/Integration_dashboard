@@ -9,9 +9,9 @@ const props = defineProps<{
 
 const defs = [
   'No blocking errors, heartbeat fresh',
-  'One transaction blocked by mapping / indexing',
-  'More than one blocked, opened today',
-  'More than one blocked, unresolved into day 2',
+  'One order unmatched or blocked',
+  'More than one unmatched / blocked, opened today',
+  'More than one unmatched / blocked, unresolved into day 2',
   'Tool down — nothing flowing',
 ]
 

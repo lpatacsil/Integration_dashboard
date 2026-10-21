@@ -52,6 +52,8 @@ router.get('/', async (req: Request, res: Response) => {
       const t = new Date(e.occurred_at).getTime();
       return t >= rangeStartMs && t < rangeEndMs;
     });
+    // Unmatched drafts / orders count as blocking, so severity follows the order matching
+    if (orderSync) openBlocking.push(...orderSync.unmatched);
 
     // 2. Heartbeat age
     const heartbeatAgeMin = hb ? (Date.now() - new Date(hb.heartbeat_at).getTime()) / 60000 : 999;
@@ -133,7 +135,6 @@ router.get('/', async (req: Request, res: Response) => {
       openBlocking,
       perFlowSeverity,
       flowStats,
-      orderSync,
       sparklines,
       escalation,
       startDate,

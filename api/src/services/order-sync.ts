@@ -1,6 +1,7 @@
 import { fetchDraftsByDateRange, isConfigured as shopifyConfigured } from './shopify-client';
 import { fetchSalesOrders } from './netsuite-sync';
 import { isConfigured as netsuiteConfigured } from './netsuite-auth';
+import type { OpenBlockingError } from '../severity';
 
 // Order flow stats — follow each Shopify draft created in the range through both legs:
 //   draft → NetSuite SO (SO memo = draft #) → SO marked integration ready → Shopify SO # matches a Shopify order.
@@ -17,6 +18,7 @@ export interface OrderSyncStats {
   pending: number;
   pending_draft: number;   // draft too new to judge (S2N)
   pending_ready: number;   // SO created but not integration ready yet (N2S)
+  unmatched: OpenBlockingError[];   // each error as a blocking item, so it feeds the severity ladder
 }
 
 const ORDER_SYNC_CACHE_MS = 2 * 60 * 1000;
@@ -24,6 +26,16 @@ const ORDER_SYNC_GRACE_MINUTES = 15;   // same window the recon alerts wait befo
 const SO_LOOKAHEAD_DAYS = 7;           // an SO can be created a few days after its draft
 const orderSyncCache = new Map<string, { at: number; value: OrderSyncStats }>();
 const DRAFT_MEMO = /^#D\d+$/;
+
+function unmatchedItem(
+  flowCode: string, ref: string, code: string, message: string, occurredAt: string, salesOrder: string | null,
+): OpenBlockingError {
+  return {
+    error_id: `${code}:${ref}`, transaction_id: ref, flow_code: flowCode, entity_identifier: ref,
+    error_code: code, error_message: message, occurred_at: occurredAt,
+    sales_order_id: salesOrder, transaction_type: flowCode === 'S2N' ? 'Draft Order' : 'Sales Order',
+  };
+}
 
 export async function getOrderSyncStats(startDate: string, endDate: string): Promise<OrderSyncStats | null> {
   if (!shopifyConfigured() || !netsuiteConfigured()) return null;
@@ -49,14 +61,17 @@ export async function getOrderSyncStats(startDate: string, endDate: string): Pro
   const stats: OrderSyncStats = {
     drafts: drafts.size, so_created: 0, ready: 0, resolved: 0,
     errors: 0, errors_no_so: 0, errors_no_order: 0, pending: 0, pending_draft: 0, pending_ready: 0,
+    unmatched: [],
   };
   const now = Date.now();
   for (const [name, draft] of drafts) {
     const ageMin = (now - new Date(draft.created_at).getTime()) / 60000;
     const so = soByMemo.get(name);
     if (!so) {
-      if (ageMin >= ORDER_SYNC_GRACE_MINUTES) stats.errors_no_so++;
-      else stats.pending_draft++;
+      if (ageMin >= ORDER_SYNC_GRACE_MINUTES) {
+        stats.errors_no_so++;
+        stats.unmatched.push(unmatchedItem('S2N', name, 'UNMATCHED-SO', `${name} has no NetSuite sales order`, draft.created_at, null));
+      } else stats.pending_draft++;
       continue;
     }
     stats.so_created++;
@@ -66,7 +81,12 @@ export async function getOrderSyncStats(startDate: string, endDate: string): Pro
     const shopifyOrder: string | null = draft.shopify_order;
     const nsShopifySo: string | null = so.shopify_so?.trim() || null;
     if (nsShopifySo && nsShopifySo === shopifyOrder) stats.resolved++;
-    else stats.errors_no_order++;
+    else {
+      stats.errors_no_order++;
+      stats.unmatched.push(unmatchedItem('N2S', so.so_number, 'UNMATCHED-ORDER',
+        nsShopifySo ? `${so.so_number} Shopify SO # ${nsShopifySo} does not match a Shopify order` : `${so.so_number} is integration ready but has no Shopify SO #`,
+        draft.created_at, so.so_number));
+    }
   }
   stats.errors = stats.errors_no_so + stats.errors_no_order;
   stats.pending = stats.pending_draft + stats.pending_ready;

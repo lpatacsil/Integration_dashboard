@@ -20,10 +20,11 @@ function buildWhy(): string {
     return `<strong>Connector is down.</strong> Last heartbeat ${o.heartbeatAgeMin} min ago; ${o.txLast60} transactions in the last 60 min against a baseline of ~${o.baselineLast60}. Nothing is moving between Shopify and NetSuite.`
   if (sev === 3) {
     const old = ob.filter(e => new Date(e.occurred_at) < startOfToday)
-    return `<strong>${ob.length} transactions blocked by mapping gaps</strong>, ${old.length} of them open since yesterday (${old.map(e => e.entity_identifier).join(', ')}). Unresolved into day 2 — management is now copied.`
+    const shown = old.slice(0, 5).map(e => e.entity_identifier).join(', ')
+    return `<strong>${ob.length} transactions blocked or unmatched</strong>, ${old.length} of them open since before today (${shown}${old.length > 5 ? ', …' : ''}). Unresolved into day 2 — management is now copied.`
   }
   if (sev === 2)
-    return `<strong>${ob.length} transactions blocked</strong> by unmapped data objects (${[...new Set(ob.map(e => e.error_code))].join(', ')}), all opened today. Everything else is flowing.`
+    return `<strong>${ob.length} transactions blocked or unmatched</strong> (${[...new Set(ob.map(e => e.error_code))].join(', ')}), all opened today. Everything else is flowing.`
   if (sev === 1 && ob[0])
     return `<strong>One transaction blocked:</strong> ${ob[0].entity_identifier} — ${ob[0].error_message}. All other traffic flowing normally.`
   return `No blocking errors open. Heartbeat ${o.heartbeatAgeMin} min ago, ${o.txLast60} transactions in the last hour. Non-blocking NetSuite errors, if any, are on the internal log tab.`
