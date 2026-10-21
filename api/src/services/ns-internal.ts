@@ -119,14 +119,16 @@ async function inventoryIssues(startDate: string, endDate: string): Promise<NsIs
 }
 
 async function validationIssues(startDate: string, endDate: string): Promise<NsIssue[]> {
+  // The SO's location lives on its main line, not the transaction header
   const rows = await suiteQLAll(`
     SELECT t.id, t.tranid, t.memo, BUILTIN.DF(t.entity) AS customer, t.trandate,
-           t.location, t.shippingaddress, t.otherrefnum
+           ml.location, t.shippingaddress, t.otherrefnum
     FROM transaction t
+    JOIN transactionline ml ON ml.transaction = t.id AND ml.mainline = 'T'
     WHERE t.type = 'SalesOrd'
       AND t.status NOT IN ${INACTIVE_SO_STATUS}
       AND t.trandate >= '${toNsDate(startDate)}' AND t.trandate <= '${toNsDate(endDate)}'
-      AND (t.location IS NULL OR t.shippingaddress IS NULL OR t.otherrefnum IS NULL)
+      AND (ml.location IS NULL OR t.shippingaddress IS NULL OR t.otherrefnum IS NULL)
     ORDER BY t.id DESC
   `);
   const issues: NsIssue[] = [];
