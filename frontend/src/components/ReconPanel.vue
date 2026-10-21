@@ -143,11 +143,67 @@ const searched = computed<ReconRecord[]>(() => {
   )
 })
 
-const totalPages = computed(() => Math.max(1, Math.ceil(searched.value.length / PAGE_SIZE)))
+// Column sorting — click a header to sort ascending, click again for descending
+type SortKind = 'text' | 'number' | 'date'
+const SORT_COLUMNS: Record<string, { kind: SortKind; value: (r: ReconRecord) => string | null }> = {
+  status:            { kind: 'text',   value: r => statusLabel(r.status) },
+  shopify_draft:     { kind: 'text',   value: r => r.shopify_draft },
+  shopify_so:        { kind: 'text',   value: r => r.netsuite_shopify_so || r.shopify_order },
+  shopify_customer:  { kind: 'text',   value: r => r.shopify_customer },
+  shopify_amount:    { kind: 'number', value: r => r.shopify_amount },
+  shopify_created:   { kind: 'date',   value: r => r.shopify_created },
+  netsuite_so:       { kind: 'text',   value: r => r.netsuite_so },
+  netsuite_memo:     { kind: 'text',   value: r => r.netsuite_memo },
+  netsuite_customer: { kind: 'text',   value: r => r.netsuite_customer },
+  netsuite_amount:   { kind: 'number', value: r => r.netsuite_amount },
+  netsuite_date:     { kind: 'date',   value: r => r.netsuite_date },
+}
+const sortKey = ref<string | null>(null)
+const sortDir = ref<'asc' | 'desc'>('asc')
+
+function toggleSort(key: string) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = key
+    sortDir.value = 'asc'
+  }
+  page.value = 1
+}
+
+function sortIndicator(key: string): string {
+  if (sortKey.value !== key) return '↕'
+  return sortDir.value === 'asc' ? '▲' : '▼'
+}
+
+const sorted = computed<ReconRecord[]>(() => {
+  const col = sortKey.value ? SORT_COLUMNS[sortKey.value] : null
+  if (!col) return searched.value
+  const dir = sortDir.value === 'asc' ? 1 : -1
+  const toComparable = (v: string | null): number | string | null => {
+    if (v == null || v === '') return null
+    if (col.kind === 'number') { const n = Number(v); return isNaN(n) ? null : n }
+    if (col.kind === 'date') { const t = new Date(v).getTime(); return isNaN(t) ? null : t }
+    return v.toLowerCase()
+  }
+  return [...searched.value].sort((a, b) => {
+    const va = toComparable(col.value(a))
+    const vb = toComparable(col.value(b))
+    // Empty values always go last, regardless of direction
+    if (va == null && vb == null) return 0
+    if (va == null) return 1
+    if (vb == null) return -1
+    if (va < vb) return -1 * dir
+    if (va > vb) return 1 * dir
+    return 0
+  })
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(sorted.value.length / PAGE_SIZE)))
 
 const filtered = computed<ReconRecord[]>(() => {
   const start = (page.value - 1) * PAGE_SIZE
-  return searched.value.slice(start, start + PAGE_SIZE)
+  return sorted.value.slice(start, start + PAGE_SIZE)
 })
 
 watch(search, () => { page.value = 1 })
@@ -438,17 +494,17 @@ function formatSyncTime(iso: string): string {
         <table>
           <thead>
             <tr>
-              <th>Status</th>
-              <th>Shopify Draft</th>
-              <th>Shopify SO #</th>
-              <th>Shopify Customer</th>
-              <th class="num">Shopify Amount</th>
-              <th>Draft Created</th>
-              <th>NetSuite SO</th>
-              <th>Memo</th>
-              <th>NS Customer</th>
-              <th class="num">NS Amount</th>
-              <th>NS Date</th>
+              <th class="sortable" :class="{ sorted: sortKey === 'status' }" @click="toggleSort('status')">Status <span class="sort-ind">{{ sortIndicator('status') }}</span></th>
+              <th class="sortable" :class="{ sorted: sortKey === 'shopify_draft' }" @click="toggleSort('shopify_draft')">Shopify Draft <span class="sort-ind">{{ sortIndicator('shopify_draft') }}</span></th>
+              <th class="sortable" :class="{ sorted: sortKey === 'shopify_so' }" @click="toggleSort('shopify_so')">Shopify SO # <span class="sort-ind">{{ sortIndicator('shopify_so') }}</span></th>
+              <th class="sortable" :class="{ sorted: sortKey === 'shopify_customer' }" @click="toggleSort('shopify_customer')">Shopify Customer <span class="sort-ind">{{ sortIndicator('shopify_customer') }}</span></th>
+              <th class="num sortable" :class="{ sorted: sortKey === 'shopify_amount' }" @click="toggleSort('shopify_amount')">Shopify Amount <span class="sort-ind">{{ sortIndicator('shopify_amount') }}</span></th>
+              <th class="sortable" :class="{ sorted: sortKey === 'shopify_created' }" @click="toggleSort('shopify_created')">Draft Created <span class="sort-ind">{{ sortIndicator('shopify_created') }}</span></th>
+              <th class="sortable" :class="{ sorted: sortKey === 'netsuite_so' }" @click="toggleSort('netsuite_so')">NetSuite SO <span class="sort-ind">{{ sortIndicator('netsuite_so') }}</span></th>
+              <th class="sortable" :class="{ sorted: sortKey === 'netsuite_memo' }" @click="toggleSort('netsuite_memo')">Memo <span class="sort-ind">{{ sortIndicator('netsuite_memo') }}</span></th>
+              <th class="sortable" :class="{ sorted: sortKey === 'netsuite_customer' }" @click="toggleSort('netsuite_customer')">NS Customer <span class="sort-ind">{{ sortIndicator('netsuite_customer') }}</span></th>
+              <th class="num sortable" :class="{ sorted: sortKey === 'netsuite_amount' }" @click="toggleSort('netsuite_amount')">NS Amount <span class="sort-ind">{{ sortIndicator('netsuite_amount') }}</span></th>
+              <th class="sortable" :class="{ sorted: sortKey === 'netsuite_date' }" @click="toggleSort('netsuite_date')">NS Date <span class="sort-ind">{{ sortIndicator('netsuite_date') }}</span></th>
             </tr>
           </thead>
           <tbody>
@@ -700,5 +756,22 @@ function formatSyncTime(iso: string): string {
 }
 .row-resolved {
   background: rgba(34, 197, 94, 0.04);
+}
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+th.sortable:hover {
+  color: var(--accent, #2563eb);
+}
+.sort-ind {
+  font-size: 0.7em;
+  opacity: 0.35;
+  margin-left: 2px;
+}
+th.sorted .sort-ind {
+  opacity: 1;
+  color: var(--accent, #2563eb);
 }
 </style>
