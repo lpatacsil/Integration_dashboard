@@ -83,20 +83,4 @@ router.get('/sales-orders', async (req: Request, res: Response) => {
   }
 });
 
-// TEMPORARY — read-only discovery of the case record (rectype 2049); remove once fields are mapped
-router.get('/_discover-cases', async (_req: Request, res: Response) => {
-  try {
-    const { suiteQL } = await import('../services/netsuite-client');
-    const [sample, labels, sources] = await Promise.all([
-      suiteQL(`SELECT * FROM customrecord_issue_log WHERE name = 'ISS-220926112259-0' OR custrecord_il_source = 'Sales Order' ORDER BY id DESC`, 2, 0),
-      suiteQL(`SELECT id, BUILTIN.DF(custrecord_il_status) AS status, BUILTIN.DF(custrecord_il_owner) AS owner, BUILTIN.DF(custrecord_il_assigned_to) AS assigned FROM customrecord_issue_log WHERE custrecord_il_source = 'Sales Order' ORDER BY id DESC`, 2, 0),
-      suiteQL(`SELECT custrecord_il_source AS source, BUILTIN.DF(custrecord_il_status) AS status, COUNT(id) AS cnt FROM customrecord_issue_log GROUP BY custrecord_il_source, BUILTIN.DF(custrecord_il_status)`, 50, 0),
-    ]);
-    const strip = (r: any) => { const { custrecord_il_comment_history, custrecord_il_detail, ...rest } = r; return { ...rest, detail: String(custrecord_il_detail || '').slice(0, 200) }; };
-    res.json({ sample: sample.items.map(strip), labels: labels.items, sources: sources.items });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 export default router;

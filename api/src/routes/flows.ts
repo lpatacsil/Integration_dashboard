@@ -5,6 +5,7 @@ import { classifyFlow } from '../severity';
 import { isConfigured } from '../services/netsuite-auth';
 import { fetchNSInternalErrors } from '../services/netsuite-sync';
 import { getOrderSyncStats } from '../services/order-sync';
+import { getRelatedCases } from '../services/cases';
 import {
   indexById, toOpenBlockingErrors, toOpenIncidents, errorsForFlow,
   computeFlowKpi, computeErrorCategorySummary, computeDailyBreakdown, computeErrorSparkline,
@@ -174,6 +175,16 @@ router.get('/:code', async (req: Request, res: Response) => {
       indexingNeeds = { ...needsSummary, openOrders };
     }
 
+    // NetSuite cases raised against this flow's orders, in range
+    const relatedCases = (flowCode === 'S2N' || flowCode === 'N2S')
+      ? await getRelatedCases(startDate, endDate)
+        .then(c => c?.[flowCode] ?? null)
+        .catch(err => {
+          console.error('flows related cases error:', err.message);
+          return null;
+        })
+      : null;
+
     res.json({
       flowCode,
       ...FLOWS[flowCode],
@@ -184,6 +195,7 @@ router.get('/:code', async (req: Request, res: Response) => {
       openIncidents,
       sparkline,
       ...(indexingNeeds ? { indexingNeeds } : {}),
+      ...(relatedCases ? { relatedCases } : {}),
       ...(nsInternalData ? { nsDirectSource: nsInternalData.source, nsVertexCounts: nsInternalData.vertex } : {}),
     });
   } catch (err: any) {

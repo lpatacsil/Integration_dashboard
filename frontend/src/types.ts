@@ -177,6 +177,23 @@ export interface FlowDetailResponse {
   openIncidents: Incident[]
   sparkline: number[]
   indexingNeeds?: IndexingNeeds
+  relatedCases?: RelatedCase[]
+}
+
+export interface RelatedCase {
+  id: string
+  issue_id: string
+  detail: string
+  status: string
+  is_open: boolean
+  owner: string | null
+  assigned_to: string | null
+  customer: string | null
+  issue_type: string | null
+  sales_order: string | null
+  draft_number: string | null
+  created_date: string
+  url: string
 }
 
 /* ── /api/alerts ── */
