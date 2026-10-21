@@ -83,5 +83,17 @@ router.get('/sales-orders', async (req: Request, res: Response) => {
   }
 });
 
+// TEMPORARY — read-only discovery of the case record (rectype 2049); remove once fields are mapped
+router.get('/_discover-cases', async (_req: Request, res: Response) => {
+  try {
+    const { suiteQL } = await import('../services/netsuite-client');
+    const type = await suiteQL(`SELECT scriptid, name FROM customrecordtype WHERE internalid = 2049`, 1, 0);
+    const scriptId = (type.items[0] as any)?.scriptid;
+    const sample = scriptId ? await suiteQL(`SELECT * FROM ${scriptId} ORDER BY id DESC`, 3, 0) : null;
+    res.json({ type: type.items, sample: sample?.items ?? null });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;
