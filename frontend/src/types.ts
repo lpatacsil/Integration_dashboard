@@ -178,6 +178,19 @@ export interface FlowDetailResponse {
   sparkline: number[]
   indexingNeeds?: IndexingNeeds
   relatedCases?: RelatedCase[]
+  nsIssues?: NsIssue[]
+  nsSourceErrors?: string[]
+}
+
+export interface NsIssue {
+  category: 'TAX-VERTEX' | 'INV-ITEM' | 'VAL-DATA'
+  so_id: string
+  so_number: string
+  draft_number: string | null
+  customer: string | null
+  detail: string
+  occurred_at: string
+  url: string
 }
 
 export interface RelatedCase {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { FlowDetailResponse, Rules, CategoryRule } from '../types'
 import KpiCard from './KpiCard.vue'
 import CategoryTable from './CategoryTable.vue'
@@ -27,6 +27,13 @@ const nsCodes = ['TAX-VERTEX', 'INV-ITEM', 'VAL-DATA'] as const
 function getCatLabel(code: string): string {
   return props.categoryRules.find(x => x.code === code)?.label || code
 }
+
+// Failing sales orders pulled from NetSuite, filterable by category
+const issueFilter = ref<string>('all')
+const issues = computed(() => props.data?.nsIssues || [])
+const filteredIssues = computed(() =>
+  issueFilter.value === 'all' ? issues.value : issues.value.filter(i => i.category === issueFilter.value))
+const shortLabel: Record<string, string> = { 'TAX-VERTEX': 'Vertex tax', 'INV-ITEM': 'Inventory', 'VAL-DATA': 'Validation' }
 </script>
 
 <template>
@@ -64,6 +71,50 @@ function getCatLabel(code: string): string {
         <div class="card">
           <h3>Daily breakdown</h3>
           <DailyTable :daily="data.daily || []" />
+        </div>
+      </div>
+
+      <div class="card" v-if="data.nsIssues">
+        <h3>
+          Sales orders with errors
+          <span class="hint">pulled live from NetSuite · open sales orders in range</span>
+        </h3>
+        <div class="seg" style="margin-bottom:10px">
+          <button :aria-pressed="issueFilter === 'all'" @click="issueFilter = 'all'">All {{ issues.length }}</button>
+          <button
+            v-for="code in nsCodes"
+            :key="code"
+            :aria-pressed="issueFilter === code"
+            @click="issueFilter = code"
+          >{{ shortLabel[code] }} {{ issues.filter(i => i.category === code).length }}</button>
+        </div>
+        <div v-if="data.nsSourceErrors?.length" class="muted" style="margin-bottom:8px">
+          Some checks could not run: {{ data.nsSourceErrors.join(' · ') }}
+        </div>
+        <div v-if="!filteredIssues.length" class="empty">No sales orders with this kind of error in range.</div>
+        <div v-else class="tablewrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Sales order</th>
+                <th>Draft</th>
+                <th>Customer</th>
+                <th>Problem</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="i in filteredIssues" :key="i.category + i.so_id">
+                <td><span class="cat block">{{ shortLabel[i.category] }}</span></td>
+                <td class="mono"><a :href="i.url" target="_blank" rel="noopener">{{ i.so_number }}</a></td>
+                <td class="mono muted">{{ i.draft_number || '—' }}</td>
+                <td>{{ i.customer || '—' }}</td>
+                <td>{{ i.detail }}</td>
+                <td class="muted">{{ i.occurred_at }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
