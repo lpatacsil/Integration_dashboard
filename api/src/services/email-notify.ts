@@ -255,7 +255,12 @@ export function buildAlertHtml(opts: {
 
 // ── Public API ──
 
+// Temporary pause: all outbound alert emails (unmatched SO, Shopify / NetSuite
+// sync alerts, daily severity summary) are switched off. Set to false to resume.
+const EMAIL_PAUSED = true;
+
 export function isEmailEnabled(): boolean {
+  if (EMAIL_PAUSED) return false;
   if (isGraphConfigured()) return true;
   const cfg = getSmtpConfig();
   return !!(cfg.host && cfg.user && cfg.pass);
@@ -275,6 +280,10 @@ export async function sendAlertEmail(
   body: string,
   html?: string,
 ): Promise<boolean> {
+  if (EMAIL_PAUSED) {
+    console.log(`Email paused, not sending: ${subject}`);
+    return false;
+  }
   const toEmails = resolveEmails(recipients);
   const ccEmails = resolveEmails(cc);
 
